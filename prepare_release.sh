@@ -215,6 +215,27 @@ prepare_main_software() {
 prepare_flicker_detection() {
     log_step "Preparing Flicker_Detection (compile locally)"
 
+    # Ensure nvcc is reachable. CUDA's bin dir is often only on PATH for
+    # interactive shells (~/.bashrc), so a non-interactive script run may
+    # miss it. Auto-detect /usr/local/cuda{,-*}/bin and prepend to PATH.
+    if ! command -v nvcc >/dev/null 2>&1; then
+        local cuda_bin=""
+        for candidate in /usr/local/cuda/bin /usr/local/cuda-*/bin; do
+            if [ -x "$candidate/nvcc" ]; then
+                cuda_bin="$candidate"
+                break
+            fi
+        done
+        if [ -n "$cuda_bin" ]; then
+            log_info "Adding $cuda_bin to PATH for CUDA build"
+            export PATH="$cuda_bin:$PATH"
+            export CUDACXX="$cuda_bin/nvcc"
+        else
+            log_error "nvcc not found. Install CUDA or add nvcc to PATH."
+            return 1
+        fi
+    fi
+
     # Step 1: Build locally with CMake
     log_info "Building Flicker_Detection locally..."
     mkdir -p "$SCRIPT_DIR/Flicker_Detection/build"
