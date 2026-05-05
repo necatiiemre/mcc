@@ -35,6 +35,7 @@ set(SOURCES
     src/PsuTelemetryPublisher.cpp
     src/AppMode.cpp
     src/FirmwareUpdaterRunner.cpp
+    src/FlickerDetectionRunner.cpp
 )
 
 # pthread for std::thread (PsuTelemetryPublisher background loop)

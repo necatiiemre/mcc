@@ -3,6 +3,7 @@
 #include "DviManager.h"
 #include "DriverManager.h"
 #include <thread>
+#include <chrono>
 #include <iostream>
 #include <string>
 #include <optional>
@@ -11,12 +12,21 @@
 #include <unistd.h>
 #include <cstdlib>
 #include <atomic>
+#include <csignal>
 #include "Globals.h"
 #include "ErrorUtils.h"
 #include <opencv2/core/ocl.hpp>
 #include <opencv2/opencv.hpp>
 
 std::atomic<bool> stopRequested{false};
+
+static std::atomic<bool> g_shutdown_signal{false};
+
+static void shutdown_signal_handler(int /*sig*/)
+{
+    g_shutdown_signal = true;
+    stopRequested = true;
+}
 
 /* Velocity Flicker Detection Thread */
 void flickerDetectionTask(int card1Input, int channel1Input,
@@ -149,12 +159,133 @@ void processCommands()
     }
 }
 
-int main()
+struct CliConfig
+{
+    bool provided = false;
+    int mode = 0;            // 1=velocity, 2=dvi, 3=both
+    int card1 = 0;
+    int channel1 = 0;
+    bool useCard2 = false;
+    int card2 = 0;
+    int channel2 = 0;
+    int dviChannel = 0;
+    bool loopback = false;
+    bool noCommands = false;
+};
+
+static bool parseIntArg(const std::string& s, int& out)
+{
+    try { out = std::stoi(s); return true; } catch (...) { return false; }
+}
+
+static CliConfig parseArgs(int argc, char** argv)
+{
+    CliConfig cfg;
+    bool sawMode = false;
+    for (int i = 1; i < argc; ++i)
+    {
+        std::string a = argv[i];
+        auto next = [&](int& v) -> bool {
+            if (i + 1 >= argc) return false;
+            return parseIntArg(argv[++i], v);
+        };
+        if (a == "--mode" && next(cfg.mode)) { sawMode = true; }
+        else if (a == "--card1") next(cfg.card1);
+        else if (a == "--channel1") next(cfg.channel1);
+        else if (a == "--card2") { cfg.useCard2 = true; next(cfg.card2); }
+        else if (a == "--channel2") { cfg.useCard2 = true; next(cfg.channel2); }
+        else if (a == "--dvi-channel") next(cfg.dviChannel);
+        else if (a == "--loopback") cfg.loopback = true;
+        else if (a == "--no-commands") cfg.noCommands = true;
+        else
+        {
+            std::cerr << "Unknown argument: " << a << std::endl;
+        }
+    }
+    cfg.provided = sawMode;
+    return cfg;
+}
+
+int main(int argc, char** argv)
 {
     std::cout << cv::getBuildInformation() << std::endl;
 
     cv::setNumThreads(1);
     cv::ocl::setUseOpenCL(false);
+
+    CliConfig cli = parseArgs(argc, argv);
+
+    std::thread velocity_thread;
+    std::thread dvi_thread;
+
+    if (cli.provided)
+    {
+        if (cli.mode == 1)
+        {
+            std::optional<Card> card2;
+            std::optional<Channel> channel2;
+            if (cli.useCard2)
+            {
+                card2 = static_cast<Card>(cli.card2);
+                channel2 = static_cast<Channel>(cli.channel2);
+            }
+            loopbackTestMode = cli.loopback;
+            velocity_thread = std::thread(flickerDetectionTask, cli.card1, cli.channel1, card2, channel2, loopbackTestMode);
+        }
+        else if (cli.mode == 2)
+        {
+            dvi_thread = std::thread(flickerDetectionDviTask, cli.dviChannel);
+        }
+        else if (cli.mode == 3)
+        {
+            std::optional<Card> card2;
+            std::optional<Channel> channel2;
+            if (cli.useCard2)
+            {
+                card2 = static_cast<Card>(cli.card2);
+                channel2 = static_cast<Channel>(cli.channel2);
+            }
+            loopbackTestMode = cli.loopback;
+            velocity_thread = std::thread(flickerDetectionTask, cli.card1, cli.channel1, card2, channel2, loopbackTestMode);
+            dvi_thread = std::thread(flickerDetectionDviTask, cli.dviChannel);
+        }
+        else
+        {
+            std::cerr << "Invalid --mode value (expected 1/2/3)\n";
+            return 1;
+        }
+
+        std::thread command_thread;
+        std::thread shutdown_watcher;
+        if (cli.noCommands)
+        {
+            struct sigaction sa{};
+            sa.sa_handler = shutdown_signal_handler;
+            sigemptyset(&sa.sa_mask);
+            sa.sa_flags = 0;
+            sigaction(SIGTERM, &sa, nullptr);
+            sigaction(SIGINT, &sa, nullptr);
+
+            shutdown_watcher = std::thread([]() {
+                while (!g_shutdown_signal) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                }
+                driver_manager.stopFlickerDetection();
+                dvi_manager.stop(2);
+            });
+        }
+        else
+        {
+            command_thread = std::thread(processCommands);
+        }
+
+        if (velocity_thread.joinable()) velocity_thread.join();
+        if (dvi_thread.joinable()) dvi_thread.join();
+        if (command_thread.joinable()) command_thread.join();
+        if (shutdown_watcher.joinable()) shutdown_watcher.join();
+        std::cout << "Program terminated successfully.\n";
+        return 0;
+    }
 
     std::string modeSelection;
     std::cout << "🟢 Choose Flicker Detection Mode:\n";
@@ -163,9 +294,6 @@ int main()
     std::cout << "3 - Both\n";
     std::cout << "Selection: ";
     std::getline(std::cin, modeSelection);
-
-    std::thread velocity_thread;
-    std::thread dvi_thread;
 
     if (modeSelection == "1" || modeSelection == "velocity")
     {

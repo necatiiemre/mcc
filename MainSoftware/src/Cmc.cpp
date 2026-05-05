@@ -7,6 +7,7 @@
 #include "Dtn.h"
 #include "PsuTelemetry.h"
 #include "PsuTelemetryPublisher.h"
+#include "FlickerDetectionRunner.h"
 #include "Utils.h"
 #include <iostream>
 #include <unistd.h>
@@ -204,10 +205,27 @@ bool Cmc::configureSequence()
 
     sleep(1);
 
+    // Start local FlickerDetection right before DPDK CMC. Parameters come
+    // from FlickerDetectionConfig::Cmc; output goes to LOGS/CMC/.
+    ensureLogDirectories();
+    FlickerDetectionRunner flicker;
+    std::string flicker_log = LogPaths::CMC() + "/flicker_detection.log";
+    if (!flicker.startForCmc(flicker_log))
+    {
+        ErrorPrinter::warn("FLICKER",
+            "CMC: FlickerDetection could not be started, continuing without it.");
+    }
+    else
+    {
+        std::cout << "CMC: FlickerDetection running (log: " << flicker_log
+                  << ")" << std::endl;
+    }
+
     // DPDK CMC - Interactive mode with embedded ATE/latency prompts
     if (!runDpdkCmcInteractive("-l 0-255 -n 16"))
     {
         ErrorPrinter::error("DPDK", "CMC: DPDK CMC deployment unsuccessful!");
+        flicker.stop();
         shutdown.executeShutdown();
         return false;
     }
@@ -288,6 +306,10 @@ bool Cmc::configureSequence()
 
     // Re-install SafeShutdown signal handlers after DPDK CMC monitoring
     shutdown.installSignalHandlers();
+
+    // Stop local FlickerDetection
+    std::cout << "CMC: Stopping FlickerDetection..." << std::endl;
+    flicker.stop();
 
     // Stop DPDK CMC on server
     std::cout << "CMC: Stopping DPDK CMC on server..." << std::endl;

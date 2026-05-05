@@ -10,11 +10,12 @@ FILE *startFFmpegWriter(const std::string &videoFile, int width, int height, int
 {
     std::ostringstream ffmpegCmd;
     ffmpegCmd << "ffmpeg -y "
-              << "-loglevel quiet "
+              << "-loglevel error "
               << "-f rawvideo -pix_fmt bgr24 -s "
               << width << "x" << height << " "
               << "-r " << fps << " -i - "
-              << "-c:v h264_nvenc -preset p1 -b:v 10M \"" << videoFile << "\"";
+              << "-c:v h264_nvenc -preset p1 -b:v 10M \"" << videoFile << "\""
+              << " 2>>/tmp/ffmpeg_dvi.log";
 
     FILE *pipe = popen(ffmpegCmd.str().c_str(), "w");
     if (!pipe)
