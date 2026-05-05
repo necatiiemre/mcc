@@ -20,6 +20,7 @@
 #   ./prepare_release.sh main         # Prepare only MainSoftware
 #   ./prepare_release.sh pdf          # Prepare only PdfReportGenerator
 #   ./prepare_release.sh fwupdater    # Prepare only FirmwareUpdater
+#   ./prepare_release.sh flicker      # Prepare only Flicker_Detection
 #   ./prepare_release.sh assets       # Copy runtime assets only (config files)
 #
 
@@ -211,6 +212,28 @@ prepare_main_software() {
     log_info "MainSoftware prepared: $PREBUILT_DIR/MainSoftware/bin/mainSoftware"
 }
 
+prepare_flicker_detection() {
+    log_step "Preparing Flicker_Detection (compile locally)"
+
+    # Step 1: Build locally with CMake
+    log_info "Building Flicker_Detection locally..."
+    mkdir -p "$SCRIPT_DIR/Flicker_Detection/build"
+    cd "$SCRIPT_DIR/Flicker_Detection/build"
+    cmake .. -DCMAKE_BUILD_TYPE=Release
+    make -j$(nproc)
+    cd "$SCRIPT_DIR"
+
+    # Step 2: Create prebuilt directory
+    mkdir -p "$PREBUILT_DIR/Flicker_Detection"
+
+    # Step 3: Copy binary
+    log_info "Copying FlickerDetection binary to prebuilt..."
+    cp "$SCRIPT_DIR/Flicker_Detection/build/FlickerDetection" "$PREBUILT_DIR/Flicker_Detection/FlickerDetection"
+    chmod +x "$PREBUILT_DIR/Flicker_Detection/FlickerDetection"
+
+    log_info "Flicker_Detection prepared: $PREBUILT_DIR/Flicker_Detection/FlickerDetection"
+}
+
 prepare_pdf_report_generator() {
     log_step "Preparing PdfReportGenerator (compile Python to binary with PyInstaller)"
 
@@ -358,6 +381,9 @@ main() {
         fwupdater|firmware|FirmwareUpdater)
             prepare_firmware_updater
             ;;
+        flicker|flicker_detection|Flicker_Detection|FlickerDetection)
+            prepare_flicker_detection
+            ;;
         assets)
             prepare_assets
             ;;
@@ -372,11 +398,12 @@ main() {
             prepare_dpdk_cmc
             prepare_pdf_report_generator
             prepare_firmware_updater
+            prepare_flicker_detection
             prepare_assets
             ;;
         *)
             log_error "Unknown component: $COMPONENT"
-            echo "Usage: $0 [all|dpdk|dpdk_vmc|dpdk_cmc|rcs|main|pdf|fwupdater|assets]"
+            echo "Usage: $0 [all|dpdk|dpdk_vmc|dpdk_cmc|rcs|main|pdf|fwupdater|flicker|assets]"
             exit 1
             ;;
     esac
