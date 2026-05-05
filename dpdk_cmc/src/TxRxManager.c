@@ -16,7 +16,7 @@
 // ==========================================
 // SPLITMIX64 + CRC32C + XOR-ZONE PAYLOAD VERIFICATION
 // ==========================================
-// Layout written by VMC on the return path (VL-ID range 10521..10624):
+// Layout written by CMC on the return path (VL-ID range 10521..10624):
 //
 //   [seq 8B][SplitMix XOR'd 64B][CRC32C 4B][XOR-zone 1B][PRBS ...][DTN_SEQ 1B]
 //    0..7    8..71               72..75    76           77..      last
@@ -25,10 +25,10 @@
 //   1) CRC32C over [0..71] (SEQ + SplitMix XOR'd zone)
 //   2) SplitMix XOR zone byte-for-byte against locally regenerated values
 //   3) XOR-zone byte (1 B): the original PRBS byte at this offset, XOR'd by
-//      VMC firmware with the chain {6, 7, 8, 13, 15}. XOR is commutative +
+//      CMC firmware with the chain {6, 7, 8, 13, 15}. XOR is commutative +
 //      associative, so the chain folds to a single mask 0x0B; we keep both
 //      forms in source (XOR_ZONE_CHAIN = source-of-truth, XOR_ZONE_MASK =
-//      what we actually compare with). Update XOR_ZONE_CHAIN if VMC's
+//      what we actually compare with). Update XOR_ZONE_CHAIN if CMC's
 //      constant set changes; XOR_ZONE_MASK is recomputed at compile time.
 //   4) PRBS over the remaining payload (skipping the trailing DTN_SEQ byte).
 //
@@ -126,26 +126,26 @@ void port_vlans_load_config(bool ate_mode)
 // Global RX statistics per port
 struct rx_stats rx_stats_per_port[MAX_PORTS];
 
-#if STATS_MODE_VMC
-// VMC per-port statistics
-struct vmc_port_stats vmc_stats[VMC_PORT_COUNT];
+#if STATS_MODE_CMC
+// CMC per-port statistics
+struct cmc_port_stats cmc_stats[CMC_PORT_COUNT];
 
-// VMC port mapping table
-struct vmc_port_map_entry vmc_port_map[VMC_PORT_COUNT] = VMC_PORT_MAP_INIT;
+// CMC port mapping table
+struct cmc_port_map_entry cmc_port_map[CMC_PORT_COUNT] = CMC_PORT_MAP_INIT;
 
-// VLAN → VMC port fast lookup table (kept for diagnostics)
-uint8_t vlan_to_vmc_port[VMC_VLAN_LOOKUP_SIZE];
+// VLAN → CMC port fast lookup table (kept for diagnostics)
+uint8_t vlan_to_cmc_port[CMC_VLAN_LOOKUP_SIZE];
 
-// (port, queue) → VMC port lookup. Built by init_vmc_port_map() from the RX
-// side of vmc_port_map (tx_server_port / tx_server_queue). The hot path
+// (port, queue) → CMC port lookup. Built by init_cmc_port_map() from the RX
+// side of cmc_port_map (tx_server_port / tx_server_queue). The hot path
 // keys on this rather than VL-ID because Net A and Net B share VL-ID range.
-uint16_t queue_to_vmc_port[MAX_PORTS][NUM_RX_QUEUES_PER_PORT];
+uint16_t queue_to_cmc_port[MAX_PORTS][NUM_RX_QUEUES_PER_PORT];
 
 // VLAN flow rule handles (for cleanup). Sized to NUM_RX_QUEUES_PER_PORT so
 // the array grows with the queue count.
-#define VMC_MAX_FLOW_RULES_PER_PORT NUM_RX_QUEUES_PER_PORT
-static struct rte_flow *vmc_flow_handles[MAX_PORTS][VMC_MAX_FLOW_RULES_PER_PORT] = {{NULL}};
-#endif /* STATS_MODE_VMC */
+#define CMC_MAX_FLOW_RULES_PER_PORT NUM_RX_QUEUES_PER_PORT
+static struct rte_flow *cmc_flow_handles[MAX_PORTS][CMC_MAX_FLOW_RULES_PER_PORT] = {{NULL}};
+#endif /* STATS_MODE_CMC */
 
 // Global VL-ID sequence trackers per port (for RX validation)
 struct port_vl_tracker port_vl_trackers[MAX_PORTS];
@@ -222,7 +222,7 @@ static inline uint64_t get_next_tx_sequence(uint16_t port_id, uint16_t vl_id)
 
 /**
  * Read TX sequence counter for a (port, VL-ID) — public accessor used by
- * stats display to split per-VMC TX counters across multiple flows.
+ * stats display to split per-CMC TX counters across multiple flows.
  */
 uint64_t get_tx_vl_sequence(uint16_t port_id, uint16_t vl_id)
 {
@@ -537,62 +537,62 @@ void init_rx_stats(void)
     printf("RX statistics and VL-ID sequence trackers initialized for all ports\n");
 }
 
-#if STATS_MODE_VMC
+#if STATS_MODE_CMC
 // ==========================================
-// VMC PORT MAPPING & STATISTICS INIT
+// CMC PORT MAPPING & STATISTICS INIT
 // ==========================================
 
-void init_vmc_port_map(void)
+void init_cmc_port_map(void)
 {
-    // VLAN → VMC port lookup (used only for diagnostic prints).
-    memset(vlan_to_vmc_port, VMC_VLAN_INVALID, sizeof(vlan_to_vmc_port));
+    // VLAN → CMC port lookup (used only for diagnostic prints).
+    memset(vlan_to_cmc_port, CMC_VLAN_INVALID, sizeof(vlan_to_cmc_port));
 
-    // (port, queue) → VMC port lookup. CMC has a 1:1 mapping (Net A on
+    // (port, queue) → CMC port lookup. CMC has a 1:1 mapping (Net A on
     // queue 0, Net B on queue 1) so this is a tiny dense table.
     for (uint16_t p = 0; p < MAX_PORTS; p++) {
         for (uint16_t q = 0; q < NUM_RX_QUEUES_PER_PORT; q++) {
-            queue_to_vmc_port[p][q] = VMC_QUEUE_INVALID;
+            queue_to_cmc_port[p][q] = CMC_QUEUE_INVALID;
         }
     }
 
-    for (int i = 0; i < VMC_DPDK_PORT_COUNT; i++) {
-        const struct vmc_port_map_entry *e = &vmc_port_map[i];
+    for (int i = 0; i < CMC_DPDK_PORT_COUNT; i++) {
+        const struct cmc_port_map_entry *e = &cmc_port_map[i];
 
-        if (e->tx_vlan < VMC_VLAN_LOOKUP_SIZE) {
-            vlan_to_vmc_port[e->tx_vlan] = (uint8_t)i;
+        if (e->tx_vlan < CMC_VLAN_LOOKUP_SIZE) {
+            vlan_to_cmc_port[e->tx_vlan] = (uint8_t)i;
         }
 
-        // tx_server_{port,queue} is the server's RX side (VMC TX → Server RX),
+        // tx_server_{port,queue} is the server's RX side (CMC TX → Server RX),
         // which is the side the rx_worker classifies on.
         if (e->tx_server_port < MAX_PORTS &&
             e->tx_server_queue < NUM_RX_QUEUES_PER_PORT)
         {
-            uint16_t prev = queue_to_vmc_port[e->tx_server_port][e->tx_server_queue];
-            if (prev != VMC_QUEUE_INVALID) {
-                printf("Warning: (port %u, queue %u) already maps to VMC %u, "
-                       "overwriting with VMC %d\n",
+            uint16_t prev = queue_to_cmc_port[e->tx_server_port][e->tx_server_queue];
+            if (prev != CMC_QUEUE_INVALID) {
+                printf("Warning: (port %u, queue %u) already maps to CMC %u, "
+                       "overwriting with CMC %d\n",
                        e->tx_server_port, e->tx_server_queue, prev, i);
             }
-            queue_to_vmc_port[e->tx_server_port][e->tx_server_queue] = (uint16_t)i;
+            queue_to_cmc_port[e->tx_server_port][e->tx_server_queue] = (uint16_t)i;
         } else {
-            printf("Warning: VMC %d tx_server (port %u queue %u) out of range\n",
+            printf("Warning: CMC %d tx_server (port %u queue %u) out of range\n",
                    i, e->tx_server_port, e->tx_server_queue);
         }
     }
 
-    printf("\n=== VMC Port Mapping Initialized (CMC: Net A / Net B) ===\n");
-    printf("VMC Ports: %d (DPDK: %d)\n", VMC_PORT_COUNT, VMC_DPDK_PORT_COUNT);
+    printf("\n=== CMC Port Mapping Initialized (CMC: Net A / Net B) ===\n");
+    printf("CMC Ports: %d (DPDK: %d)\n", CMC_PORT_COUNT, CMC_DPDK_PORT_COUNT);
     printf("Per-packet dispatch keyed on (port, queue) — VL-ID range overlaps\n"
            "between Net A and Net B by design (server distinguishes via RX VLAN).\n");
 
-    printf("\n  VMC Port | VMC RX (Srv TX)      | VMC TX (Srv RX)      | TX VL-ID         | RX VL-ID         | Mode\n");
+    printf("\n  CMC Port | CMC RX (Srv TX)      | CMC TX (Srv RX)      | TX VL-ID         | RX VL-ID         | Mode\n");
     printf("  ---------+----------------------+----------------------+------------------+------------------+------------\n");
-    for (int i = 0; i < VMC_DPDK_PORT_COUNT; i++) {
-        const struct vmc_port_map_entry *e = &vmc_port_map[i];
-        const char *mode = (e->payload_mode == VMC_PAYLOAD_PURE_PRBS) ? "pure PRBS"
+    for (int i = 0; i < CMC_DPDK_PORT_COUNT; i++) {
+        const struct cmc_port_map_entry *e = &cmc_port_map[i];
+        const char *mode = (e->payload_mode == CMC_PAYLOAD_PURE_PRBS) ? "pure PRBS"
                                                                       : "splitmix+CRC";
         printf("   %-6s  | SrvPort%u Q%u VLAN%-3u | SrvPort%u Q%u VLAN%-3u | [%5u..%5u) | [%5u..%5u) | %s\n",
-               vmc_port_labels[i],
+               cmc_port_labels[i],
                e->rx_server_port, e->rx_server_queue, e->rx_vlan,
                e->tx_server_port, e->tx_server_queue, e->tx_vlan,
                e->tx_vl_id_start, e->tx_vl_id_start + e->vl_id_count,
@@ -602,43 +602,43 @@ void init_vmc_port_map(void)
     printf("================================================\n\n");
 }
 
-void init_vmc_stats(void)
+void init_cmc_stats(void)
 {
-    for (int i = 0; i < VMC_PORT_COUNT; i++) {
-        rte_atomic64_init(&vmc_stats[i].good_pkts);
-        rte_atomic64_init(&vmc_stats[i].bad_pkts);
-        rte_atomic64_init(&vmc_stats[i].splitmix_fail);
-        rte_atomic64_init(&vmc_stats[i].crc32_fail);
-        rte_atomic64_init(&vmc_stats[i].xor_fail);
-        rte_atomic64_init(&vmc_stats[i].bit_errors);
-        rte_atomic64_init(&vmc_stats[i].lost_pkts);
-        rte_atomic64_init(&vmc_stats[i].out_of_order_pkts);
-        rte_atomic64_init(&vmc_stats[i].duplicate_pkts);
-        rte_atomic64_init(&vmc_stats[i].short_pkts);
-        rte_atomic64_init(&vmc_stats[i].total_rx_pkts);
+    for (int i = 0; i < CMC_PORT_COUNT; i++) {
+        rte_atomic64_init(&cmc_stats[i].good_pkts);
+        rte_atomic64_init(&cmc_stats[i].bad_pkts);
+        rte_atomic64_init(&cmc_stats[i].splitmix_fail);
+        rte_atomic64_init(&cmc_stats[i].crc32_fail);
+        rte_atomic64_init(&cmc_stats[i].xor_fail);
+        rte_atomic64_init(&cmc_stats[i].bit_errors);
+        rte_atomic64_init(&cmc_stats[i].lost_pkts);
+        rte_atomic64_init(&cmc_stats[i].out_of_order_pkts);
+        rte_atomic64_init(&cmc_stats[i].duplicate_pkts);
+        rte_atomic64_init(&cmc_stats[i].short_pkts);
+        rte_atomic64_init(&cmc_stats[i].total_rx_pkts);
     }
-    printf("VMC port statistics initialized for %d ports\n", VMC_PORT_COUNT);
+    printf("CMC port statistics initialized for %d ports\n", CMC_PORT_COUNT);
 }
 
 // ==========================================
-// VMC VLAN-BASED FLOW STEERING
+// CMC VLAN-BASED FLOW STEERING
 // ==========================================
 // Steers each RX VLAN to its corresponding queue (1:1 mapping)
-// This way HW per-queue stats = per-VLAN = per-VMC port stats
+// This way HW per-queue stats = per-VLAN = per-CMC port stats
 
-int vmc_flow_rules_install(uint16_t port_id)
+int cmc_flow_rules_install(uint16_t port_id)
 {
     struct rte_flow_error error;
     int installed = 0;
 
     // How many RX VLANs does this port have?
     uint16_t rx_vlan_count = port_vlans[port_id].rx_vlan_count;
-    if (rx_vlan_count == 0 || rx_vlan_count > VMC_MAX_FLOW_RULES_PER_PORT) {
-        printf("VMC Flow: Port %u has %u RX VLANs, skipping\n", port_id, rx_vlan_count);
+    if (rx_vlan_count == 0 || rx_vlan_count > CMC_MAX_FLOW_RULES_PER_PORT) {
+        printf("CMC Flow: Port %u has %u RX VLANs, skipping\n", port_id, rx_vlan_count);
         return 0;
     }
 
-    printf("VMC Flow: Installing VLAN→Queue rules on Port %u (%u VLANs)...\n",
+    printf("CMC Flow: Installing VLAN→Queue rules on Port %u (%u VLANs)...\n",
            port_id, rx_vlan_count);
 
     for (uint16_t q = 0; q < rx_vlan_count; q++) {
@@ -690,7 +690,7 @@ int vmc_flow_rules_install(uint16_t port_id)
         // Validate + Create
         int ret = rte_flow_validate(port_id, &attr, pattern, action, &error);
         if (ret != 0) {
-            printf("VMC Flow: Port %u VLAN %u validate failed: %s\n",
+            printf("CMC Flow: Port %u VLAN %u validate failed: %s\n",
                    port_id, vlan_id,
                    error.message ? error.message : "unknown");
             continue;
@@ -698,34 +698,34 @@ int vmc_flow_rules_install(uint16_t port_id)
 
         struct rte_flow *flow = rte_flow_create(port_id, &attr, pattern, action, &error);
         if (!flow) {
-            printf("VMC Flow: Port %u VLAN %u create failed: %s\n",
+            printf("CMC Flow: Port %u VLAN %u create failed: %s\n",
                    port_id, vlan_id,
                    error.message ? error.message : "unknown");
             continue;
         }
 
-        vmc_flow_handles[port_id][q] = flow;
+        cmc_flow_handles[port_id][q] = flow;
         installed++;
         printf("  VLAN %u → Queue %u\n", vlan_id, q);
     }
 
-    printf("VMC Flow: Port %u: %d/%u rules installed\n", port_id, installed, rx_vlan_count);
+    printf("CMC Flow: Port %u: %d/%u rules installed\n", port_id, installed, rx_vlan_count);
     return (installed == rx_vlan_count) ? 0 : -1;
 }
 
-void vmc_flow_rules_remove(uint16_t port_id)
+void cmc_flow_rules_remove(uint16_t port_id)
 {
     if (port_id >= MAX_PORTS) return;
 
-    for (int q = 0; q < VMC_MAX_FLOW_RULES_PER_PORT; q++) {
-        if (vmc_flow_handles[port_id][q]) {
+    for (int q = 0; q < CMC_MAX_FLOW_RULES_PER_PORT; q++) {
+        if (cmc_flow_handles[port_id][q]) {
             struct rte_flow_error error;
-            rte_flow_destroy(port_id, vmc_flow_handles[port_id][q], &error);
-            vmc_flow_handles[port_id][q] = NULL;
+            rte_flow_destroy(port_id, cmc_flow_handles[port_id][q], &error);
+            cmc_flow_handles[port_id][q] = NULL;
         }
     }
 }
-#endif /* STATS_MODE_VMC */
+#endif /* STATS_MODE_CMC */
 
 // ==========================================
 // VLAN CONFIGURATION FUNCTIONS
@@ -975,8 +975,8 @@ int init_port_txrx(uint16_t port_id, struct txrx_config *config)
         return ret;
     }
 
-#if STATS_MODE_VMC
-    // VMC mode: RSS disabled, rte_flow VLAN steering will be used (after port start)
+#if STATS_MODE_CMC
+    // CMC mode: RSS disabled, rte_flow VLAN steering will be used (after port start)
     if (config->nb_rx_queues > 1)
     {
         // We still enable RSS because fallback is needed for packets not matching rte_flow
@@ -985,7 +985,7 @@ int init_port_txrx(uint16_t port_id, struct txrx_config *config)
         rss_hf &= dev_info.flow_type_rss_offloads;
         port_conf.rx_adv_conf.rss_conf.rss_key = NULL;
         port_conf.rx_adv_conf.rss_conf.rss_hf = rss_hf;
-        printf("Port %u VMC mode: RSS as fallback, VLAN flow steering will be installed\n", port_id);
+        printf("Port %u CMC mode: RSS as fallback, VLAN flow steering will be installed\n", port_id);
     }
     else
     {
@@ -1058,14 +1058,14 @@ int init_port_txrx(uint16_t port_id, struct txrx_config *config)
         return ret;
     }
 
-#if STATS_MODE_VMC
-    // VMC mode: Set up VLAN-based flow steering (after port start)
+#if STATS_MODE_CMC
+    // CMC mode: Set up VLAN-based flow steering (after port start)
     if (config->nb_rx_queues > 1)
     {
-        printf("Port %u: Installing VMC VLAN→Queue flow rules...\n", port_id);
-        int flow_ret = vmc_flow_rules_install(port_id);
+        printf("Port %u: Installing CMC VLAN→Queue flow rules...\n", port_id);
+        int flow_ret = cmc_flow_rules_install(port_id);
         if (flow_ret != 0) {
-            printf("Warning: VMC flow rules incomplete on port %u, falling back to RSS\n", port_id);
+            printf("Warning: CMC flow rules incomplete on port %u, falling back to RSS\n", port_id);
         }
 
         // Still configure RETA (fallback in case of flow rule miss)
@@ -1294,7 +1294,7 @@ int tx_worker(void *arg)
     uint64_t next_send_time = rte_get_tsc_cycles() + stagger_offset;
 #endif
 
-    // Dual-lane pacing (VMC shared queues): independent next_send_time per lane.
+    // Dual-lane pacing (CMC shared queues): independent next_send_time per lane.
     const bool dual_lane = (params->loopback_vl_count > 0 || params->cross_vl_count > 0);
     uint64_t lb_delay_cycles = 0, cr_delay_cycles = 0;
     uint64_t lb_next_send = 0, cr_next_send = 0;
@@ -1574,11 +1574,11 @@ int rx_worker(void *arg)
     const bool g_ate_mode_active = ate_mode_enabled();
     const uint32_t FLUSH = 128;
 
-#if STATS_MODE_VMC
-    // Per-VMC local accumulators. Per-packet dispatch is keyed on VL-ID so a
-    // single queue may feed multiple VMC slots (e.g. Port 0 Q0 carries normal
+#if STATS_MODE_CMC
+    // Per-CMC local accumulators. Per-packet dispatch is keyed on VL-ID so a
+    // single queue may feed multiple CMC slots (e.g. Port 0 Q0 carries normal
     // loopback + pure-PRBS cross return traffic).
-    struct vmc_local_accum {
+    struct cmc_local_accum {
         uint64_t rx;
         uint64_t good;
         uint64_t bad;
@@ -1588,8 +1588,8 @@ int rx_worker(void *arg)
         uint64_t bit_errors;
         uint64_t lost;
     };
-    struct vmc_local_accum local_vmc[VMC_PORT_COUNT];
-    memset(local_vmc, 0, sizeof(local_vmc));
+    struct cmc_local_accum local_cmc[CMC_PORT_COUNT];
+    memset(local_cmc, 0, sizeof(local_cmc));
 #endif
 
     bool first_good = false, first_bad = false;
@@ -1635,7 +1635,7 @@ int rx_worker(void *arg)
 
                 // ==========================================
                 // HEALTH MONITOR EARLY BRANCH (DISABLED IN CMC)
-                // VMC'den miras kalan HM dispatch'i — VL-ID 0x09..0x10
+                // CMC'den miras kalan HM dispatch'i — VL-ID 0x09..0x10
                 // aralığını yakalayıp hm_handle_packet'e veriyordu. CMC kendi
                 // HM'sini ekleyene kadar yorum satırında. Aktive ederken
                 // <health_monitor.h> include'ını da TxRxManager.c üstünde
@@ -1672,7 +1672,7 @@ int rx_worker(void *arg)
                 // VL-ID BASED SEQUENCE TRACKING
                 // Real-time gap detection + watermark tracking
                 // ==========================================
-                uint64_t pkt_gap_loss = 0;  // Per-packet gap, attributed to VMC below
+                uint64_t pkt_gap_loss = 0;  // Per-packet gap, attributed to CMC below
                 if (vl_id <= MAX_VL_ID)
                 {
                     struct vl_sequence_tracker *seq_tracker = &vl_tracker->vl_trackers[vl_id];
@@ -1733,8 +1733,8 @@ int rx_worker(void *arg)
 
                 // ==========================================
                 // PAYLOAD VERIFICATION
-                // ATE mode:        PRBS-only (no VMC transform).
-                // Unit test mode:  dispatch by per-VL-ID VMC payload_mode —
+                // ATE mode:        PRBS-only (no CMC transform).
+                // Unit test mode:  dispatch by per-VL-ID CMC payload_mode —
                 //                  legacy flows use SplitMix64 + CRC32C + PRBS,
                 //                  pure-PRBS cross flows skip SplitMix/CRC.
                 // ==========================================
@@ -1742,39 +1742,39 @@ int rx_worker(void *arg)
                 uint64_t off = (seq * (uint64_t)NUM_PRBS_BYTES) % (uint64_t)PRBS_CACHE_SIZE;
                 uint8_t *prbs_exp = prbs_cache_ext + off;
 
-#if STATS_MODE_VMC
+#if STATS_MODE_CMC
                 // CMC dispatches by (port, queue) rather than VL-ID — Net A
                 // and Net B share the same return-path VL-ID range, and only
                 // the RX VLAN (i.e. the queue rte_flow steered the packet to)
                 // distinguishes them.
-                uint16_t pkt_vmc_port =
+                uint16_t pkt_cmc_port =
                     (params->port_id < MAX_PORTS &&
                      params->queue_id < NUM_RX_QUEUES_PER_PORT)
-                        ? queue_to_vmc_port[params->port_id][params->queue_id]
-                        : (uint16_t)VMC_QUEUE_INVALID;
-                if (pkt_gap_loss > 0 && pkt_vmc_port != VMC_QUEUE_INVALID) {
-                    local_vmc[pkt_vmc_port].lost += pkt_gap_loss;
+                        ? queue_to_cmc_port[params->port_id][params->queue_id]
+                        : (uint16_t)CMC_QUEUE_INVALID;
+                if (pkt_gap_loss > 0 && pkt_cmc_port != CMC_QUEUE_INVALID) {
+                    local_cmc[pkt_cmc_port].lost += pkt_gap_loss;
                 }
 #endif
                 uint8_t payload_mode;
                 if (g_ate_mode_active) {
-                    payload_mode = VMC_PAYLOAD_PURE_PRBS;
+                    payload_mode = CMC_PAYLOAD_PURE_PRBS;
                 }
-#if STATS_MODE_VMC
-                else if (pkt_vmc_port != VMC_QUEUE_INVALID) {
-                    payload_mode = vmc_port_map[pkt_vmc_port].payload_mode;
+#if STATS_MODE_CMC
+                else if (pkt_cmc_port != CMC_QUEUE_INVALID) {
+                    payload_mode = cmc_port_map[pkt_cmc_port].payload_mode;
                 }
 #endif
                 else {
-                    payload_mode = VMC_PAYLOAD_SPLITMIX_CRC;
+                    payload_mode = CMC_PAYLOAD_SPLITMIX_CRC;
                 }
 
-                if (payload_mode == VMC_PAYLOAD_SPLITMIX_CRC) {
+                if (payload_mode == CMC_PAYLOAD_SPLITMIX_CRC) {
                     // ==========================================
                     // UNIT TEST MODE: SplitMix64 + CRC32C + XOR-zone + PRBS
                     // ==========================================
                     // 1) CRC32C check over [0..71] (SEQ + SplitMix XOR'd zone)
-                    // VMC writes CRC in big endian (network byte order)
+                    // CMC writes CRC in big endian (network byte order)
                     uint32_t calc_crc = sw_crc32c(payload_base, SEQ_BYTES + SPLITMIX_XOR_BYTES);
                     uint32_t recv_crc = __builtin_bswap32(*(uint32_t *)(payload_base + SEQ_BYTES + SPLITMIX_XOR_BYTES));
                     bool crc_ok = (calc_crc == recv_crc);
@@ -1791,7 +1791,7 @@ int rx_worker(void *arg)
                     }
                     bool sm_ok = (memcmp(payload_base + SEQ_BYTES, expected_sm, SPLITMIX_XOR_BYTES) == 0);
 
-                    // 3) XOR-zone byte at offset SEQ + 64 + 4 = 76. VMC takes
+                    // 3) XOR-zone byte at offset SEQ + 64 + 4 = 76. CMC takes
                     //    the original PRBS byte at this offset and runs it
                     //    through the XOR_ZONE_CHAIN ({6,7,8,13,15}); since
                     //    XOR is commutative we just compare against PRBS ^
@@ -1809,10 +1809,10 @@ int rx_worker(void *arg)
 
                     if (likely(crc_ok && sm_ok && xor_ok && prbs_ok)) {
                         local_good++;
-#if STATS_MODE_VMC
-                        if (pkt_vmc_port != VMC_QUEUE_INVALID) {
-                            local_vmc[pkt_vmc_port].rx++;
-                            local_vmc[pkt_vmc_port].good++;
+#if STATS_MODE_CMC
+                        if (pkt_cmc_port != CMC_QUEUE_INVALID) {
+                            local_cmc[pkt_cmc_port].rx++;
+                            local_cmc[pkt_cmc_port].good++;
                         }
 #endif
                         if (unlikely(!first_good)) {
@@ -1868,14 +1868,14 @@ int rx_worker(void *arg)
                             }
                         }
                         local_bits += berr;
-#if STATS_MODE_VMC
-                        if (pkt_vmc_port != VMC_QUEUE_INVALID) {
-                            local_vmc[pkt_vmc_port].rx++;
-                            local_vmc[pkt_vmc_port].bad++;
-                            if (!sm_ok)  local_vmc[pkt_vmc_port].sm_fail++;
-                            if (!crc_ok) local_vmc[pkt_vmc_port].crc_fail++;
-                            if (!xor_ok) local_vmc[pkt_vmc_port].xor_fail++;
-                            local_vmc[pkt_vmc_port].bit_errors += berr;
+#if STATS_MODE_CMC
+                        if (pkt_cmc_port != CMC_QUEUE_INVALID) {
+                            local_cmc[pkt_cmc_port].rx++;
+                            local_cmc[pkt_cmc_port].bad++;
+                            if (!sm_ok)  local_cmc[pkt_cmc_port].sm_fail++;
+                            if (!crc_ok) local_cmc[pkt_cmc_port].crc_fail++;
+                            if (!xor_ok) local_cmc[pkt_cmc_port].xor_fail++;
+                            local_cmc[pkt_cmc_port].bit_errors += berr;
                         }
 #endif
                     }
@@ -1883,7 +1883,7 @@ int rx_worker(void *arg)
                     // ==========================================
                     // PURE PRBS path
                     //   - ATE mode (all flows), or
-                    //   - Unit test pure-PRBS cross flow (no VMC transform).
+                    //   - Unit test pure-PRBS cross flow (no CMC transform).
                     // ==========================================
                     uint8_t *recv = payload_base + SEQ_BYTES;
                     uint8_t *exp = prbs_exp;
@@ -1891,10 +1891,10 @@ int rx_worker(void *arg)
 
                     if (likely(diff == 0)) {
                         local_good++;
-#if STATS_MODE_VMC
-                        if (pkt_vmc_port != VMC_QUEUE_INVALID) {
-                            local_vmc[pkt_vmc_port].rx++;
-                            local_vmc[pkt_vmc_port].good++;
+#if STATS_MODE_CMC
+                        if (pkt_cmc_port != CMC_QUEUE_INVALID) {
+                            local_cmc[pkt_cmc_port].rx++;
+                            local_cmc[pkt_cmc_port].good++;
                         }
 #endif
                         if (unlikely(!first_good)) {
@@ -1923,11 +1923,11 @@ int rx_worker(void *arg)
                                 berr += __builtin_popcount(r8[k] ^ e8[k]);
                         }
                         local_bits += berr;
-#if STATS_MODE_VMC
-                        if (pkt_vmc_port != VMC_QUEUE_INVALID) {
-                            local_vmc[pkt_vmc_port].rx++;
-                            local_vmc[pkt_vmc_port].bad++;
-                            local_vmc[pkt_vmc_port].bit_errors += berr;
+#if STATS_MODE_CMC
+                        if (pkt_cmc_port != CMC_QUEUE_INVALID) {
+                            local_cmc[pkt_cmc_port].rx++;
+                            local_cmc[pkt_cmc_port].bad++;
+                            local_cmc[pkt_cmc_port].bit_errors += berr;
                         }
 #endif
                     }
@@ -1952,19 +1952,19 @@ int rx_worker(void *arg)
                 rte_atomic64_add(&rx_stats_per_port[params->port_id].short_pkts, local_short);
                 rte_atomic64_add(&rx_stats_per_port[params->port_id].external_pkts, local_external);
 
-#if STATS_MODE_VMC
-                // VMC per-port payload verification stats (per-VL-ID dispatch)
-                for (uint16_t vi = 0; vi < VMC_PORT_COUNT; vi++) {
-                    struct vmc_local_accum *a = &local_vmc[vi];
+#if STATS_MODE_CMC
+                // CMC per-port payload verification stats (per-VL-ID dispatch)
+                for (uint16_t vi = 0; vi < CMC_PORT_COUNT; vi++) {
+                    struct cmc_local_accum *a = &local_cmc[vi];
                     if (a->rx == 0 && a->lost == 0) continue;
-                    rte_atomic64_add(&vmc_stats[vi].total_rx_pkts, a->rx);
-                    rte_atomic64_add(&vmc_stats[vi].good_pkts, a->good);
-                    rte_atomic64_add(&vmc_stats[vi].bad_pkts, a->bad);
-                    rte_atomic64_add(&vmc_stats[vi].splitmix_fail, a->sm_fail);
-                    rte_atomic64_add(&vmc_stats[vi].crc32_fail, a->crc_fail);
-                    rte_atomic64_add(&vmc_stats[vi].xor_fail, a->xor_fail);
-                    rte_atomic64_add(&vmc_stats[vi].bit_errors, a->bit_errors);
-                    rte_atomic64_add(&vmc_stats[vi].lost_pkts, a->lost);
+                    rte_atomic64_add(&cmc_stats[vi].total_rx_pkts, a->rx);
+                    rte_atomic64_add(&cmc_stats[vi].good_pkts, a->good);
+                    rte_atomic64_add(&cmc_stats[vi].bad_pkts, a->bad);
+                    rte_atomic64_add(&cmc_stats[vi].splitmix_fail, a->sm_fail);
+                    rte_atomic64_add(&cmc_stats[vi].crc32_fail, a->crc_fail);
+                    rte_atomic64_add(&cmc_stats[vi].xor_fail, a->xor_fail);
+                    rte_atomic64_add(&cmc_stats[vi].bit_errors, a->bit_errors);
+                    rte_atomic64_add(&cmc_stats[vi].lost_pkts, a->lost);
                     memset(a, 0, sizeof(*a));
                 }
 #endif
@@ -1988,18 +1988,18 @@ int rx_worker(void *arg)
         rte_atomic64_add(&rx_stats_per_port[params->port_id].short_pkts, local_short);
         rte_atomic64_add(&rx_stats_per_port[params->port_id].external_pkts, local_external);
 
-#if STATS_MODE_VMC
-        for (uint16_t vi = 0; vi < VMC_PORT_COUNT; vi++) {
-            struct vmc_local_accum *a = &local_vmc[vi];
+#if STATS_MODE_CMC
+        for (uint16_t vi = 0; vi < CMC_PORT_COUNT; vi++) {
+            struct cmc_local_accum *a = &local_cmc[vi];
             if (a->rx == 0 && a->lost == 0) continue;
-            rte_atomic64_add(&vmc_stats[vi].total_rx_pkts, a->rx);
-            rte_atomic64_add(&vmc_stats[vi].good_pkts, a->good);
-            rte_atomic64_add(&vmc_stats[vi].bad_pkts, a->bad);
-            rte_atomic64_add(&vmc_stats[vi].splitmix_fail, a->sm_fail);
-            rte_atomic64_add(&vmc_stats[vi].crc32_fail, a->crc_fail);
-            rte_atomic64_add(&vmc_stats[vi].xor_fail, a->xor_fail);
-            rte_atomic64_add(&vmc_stats[vi].bit_errors, a->bit_errors);
-            rte_atomic64_add(&vmc_stats[vi].lost_pkts, a->lost);
+            rte_atomic64_add(&cmc_stats[vi].total_rx_pkts, a->rx);
+            rte_atomic64_add(&cmc_stats[vi].good_pkts, a->good);
+            rte_atomic64_add(&cmc_stats[vi].bad_pkts, a->bad);
+            rte_atomic64_add(&cmc_stats[vi].splitmix_fail, a->sm_fail);
+            rte_atomic64_add(&cmc_stats[vi].crc32_fail, a->crc_fail);
+            rte_atomic64_add(&cmc_stats[vi].xor_fail, a->xor_fail);
+            rte_atomic64_add(&cmc_stats[vi].bit_errors, a->bit_errors);
+            rte_atomic64_add(&cmc_stats[vi].lost_pkts, a->lost);
         }
 #endif
     }
@@ -2008,24 +2008,24 @@ int rx_worker(void *arg)
     // CALCULATE LOST PACKETS (watermark-based, shutdown reconciliation)
     // Lost = (max_seq + 1) - pkt_count for each VL-ID
     //
-    // Real-time gap detection already populates vmc_stats[].lost_pkts per VMC
+    // Real-time gap detection already populates cmc_stats[].lost_pkts per CMC
     // during the RX loop, so we don't re-add here (that would double count).
     // Instead we reconcile: if the watermark disagrees with the live counter
     // (e.g. due to reorder over-count at real time, or missed gap at the tail
     // of the run), overwrite with the watermark value — it's the accurate
     // total. Port-wide rx_stats lost_pkts still gets the watermark added.
     // ==========================================
-#if STATS_MODE_VMC
+#if STATS_MODE_CMC
     {
         uint64_t queue_lost_total = 0;
-        for (uint16_t vi = 0; vi < VMC_PORT_COUNT; vi++) {
-            const struct vmc_port_map_entry *e = &vmc_port_map[vi];
+        for (uint16_t vi = 0; vi < CMC_PORT_COUNT; vi++) {
+            const struct cmc_port_map_entry *e = &cmc_port_map[vi];
             if (e->tx_server_port != params->port_id ||
                 e->tx_server_queue != params->queue_id) {
                 continue;
             }
 
-            uint64_t vmc_lost = 0;
+            uint64_t cmc_lost = 0;
             uint32_t vl_start = e->vl_id_start;
             uint32_t vl_end = vl_start + e->vl_id_count;
             for (uint32_t vl = vl_start; vl < vl_end && vl <= MAX_VL_ID; vl++)
@@ -2043,17 +2043,17 @@ int rx_worker(void *arg)
                 uint64_t expected_count = max_seq + 1;
 #endif
                 if (expected_count > pkt_count)
-                    vmc_lost += (expected_count - pkt_count);
+                    cmc_lost += (expected_count - pkt_count);
             }
 
             // Reconcile: replace the real-time (possibly reorder-inflated)
             // value with the accurate watermark total.
-            rte_atomic64_set(&vmc_stats[vi].lost_pkts, (int64_t)vmc_lost);
-            queue_lost_total += vmc_lost;
-            if (vmc_lost > 0) {
-                printf("RX Worker Port %u Q%u (VMC %u): %lu lost packets (VL-ID %u-%u)\n",
+            rte_atomic64_set(&cmc_stats[vi].lost_pkts, (int64_t)cmc_lost);
+            queue_lost_total += cmc_lost;
+            if (cmc_lost > 0) {
+                printf("RX Worker Port %u Q%u (CMC %u): %lu lost packets (VL-ID %u-%u)\n",
                        params->port_id, params->queue_id, vi,
-                       vmc_lost, vl_start, vl_end - 1);
+                       cmc_lost, vl_start, vl_end - 1);
             }
         }
 

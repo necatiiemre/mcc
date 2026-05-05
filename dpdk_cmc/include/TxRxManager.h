@@ -61,65 +61,65 @@ struct rx_stats
 extern struct rx_stats rx_stats_per_port[MAX_PORTS];
 
 // ==========================================
-// VMC PORT-BASED STATISTICS (STATS_MODE_VMC)
+// CMC PORT-BASED STATISTICS (STATS_MODE_CMC)
 // ==========================================
-#if STATS_MODE_VMC
+#if STATS_MODE_CMC
 
-// VMC per-port payload verification statistics
-// VMC TX (VMC→Server) quality metrics: measured on Server RX side
-struct vmc_port_stats {
+// CMC per-port payload verification statistics
+// CMC TX (CMC→Server) quality metrics: measured on Server RX side
+struct cmc_port_stats {
     rte_atomic64_t good_pkts;
     rte_atomic64_t bad_pkts;
     rte_atomic64_t splitmix_fail;    // SplitMix64 XOR zone mismatch
     rte_atomic64_t crc32_fail;       // CRC32C mismatch
-    rte_atomic64_t xor_fail;         // 1-byte XOR-zone mismatch (VMC chain
+    rte_atomic64_t xor_fail;         // 1-byte XOR-zone mismatch (CMC chain
                                      // {6,7,8,13,15} vs locally-folded mask)
     rte_atomic64_t bit_errors;
     rte_atomic64_t lost_pkts;
     rte_atomic64_t out_of_order_pkts;
     rte_atomic64_t duplicate_pkts;
     rte_atomic64_t short_pkts;
-    rte_atomic64_t total_rx_pkts;     // Server RX = VMC TX packet count
+    rte_atomic64_t total_rx_pkts;     // Server RX = CMC TX packet count
 };
 
-extern struct vmc_port_stats vmc_stats[VMC_PORT_COUNT];
+extern struct cmc_port_stats cmc_stats[CMC_PORT_COUNT];
 
-// VMC port mapping table (loaded from config at runtime)
-extern struct vmc_port_map_entry vmc_port_map[VMC_PORT_COUNT];
+// CMC port mapping table (loaded from config at runtime)
+extern struct cmc_port_map_entry cmc_port_map[CMC_PORT_COUNT];
 
-// VLAN → VMC port fast lookup table (kept for diagnostic prints).
-extern uint8_t vlan_to_vmc_port[VMC_VLAN_LOOKUP_SIZE];
+// VLAN → CMC port fast lookup table (kept for diagnostic prints).
+extern uint8_t vlan_to_cmc_port[CMC_VLAN_LOOKUP_SIZE];
 
-// (port, queue) → VMC port lookup. Each RX queue is steered via rte_flow to a
+// (port, queue) → CMC port lookup. Each RX queue is steered via rte_flow to a
 // single VLAN, and each Net A / Net B flow lives on its own queue, so this is
 // the unambiguous dispatch key for the RX hot path. VL-ID alone is not unique
 // across networks (Net A and Net B both return on VL-ID range 10521..10624);
 // the RX VLAN, and therefore the RX queue, is what distinguishes them.
-#define VMC_QUEUE_INVALID 0xFFFF
-extern uint16_t queue_to_vmc_port[MAX_PORTS][NUM_RX_QUEUES_PER_PORT];
+#define CMC_QUEUE_INVALID 0xFFFF
+extern uint16_t queue_to_cmc_port[MAX_PORTS][NUM_RX_QUEUES_PER_PORT];
 
 /**
- * Initialize VMC port mapping and VLAN lookup table
+ * Initialize CMC port mapping and VLAN lookup table
  */
-void init_vmc_port_map(void);
+void init_cmc_port_map(void);
 
 /**
- * Initialize VMC port statistics
+ * Initialize CMC port statistics
  */
-void init_vmc_stats(void);
+void init_cmc_stats(void);
 
 /**
  * Install VLAN-based rte_flow rules for RX queue steering
  * Each VLAN → routed to corresponding RX queue (1:1 mapping)
  */
-int vmc_flow_rules_install(uint16_t port_id);
+int cmc_flow_rules_install(uint16_t port_id);
 
 /**
  * Remove VLAN-based rte_flow rules
  */
-void vmc_flow_rules_remove(uint16_t port_id);
+void cmc_flow_rules_remove(uint16_t port_id);
 
-#endif /* STATS_MODE_VMC */
+#endif /* STATS_MODE_CMC */
 
 /**
  * VL-ID based sequence tracking (lock-free, watermark-based)
@@ -183,7 +183,7 @@ struct tx_worker_params
     // Phase distribution: total active port count (runtime)
     uint16_t nb_ports;
 
-    // Dual-lane pacing (VMC mode): when a queue hosts both a normal loopback
+    // Dual-lane pacing (CMC mode): when a queue hosts both a normal loopback
     // flow and a cross overlay flow, each lane gets its own rate. Either lane
     // may have count=0 (unused). If both are 0, tx_worker falls back to the
     // legacy single-lane round-robin driven by `limiter`.
@@ -217,13 +217,13 @@ void init_vlan_config(void);
 /**
  * Read the current TX sequence counter for a (port, VL-ID). Matches the
  * number of packets committed on TX for that VL-ID; used by stats display
- * to split per-VMC TX counters when a queue carries multiple flows.
+ * to split per-CMC TX counters when a queue carries multiple flows.
  */
 uint64_t get_tx_vl_sequence(uint16_t port_id, uint16_t vl_id);
 
 /**
  * Zero every TX VL-ID sequence counter. Call at warm-up → test transition
- * so shared-queue VMC RX (Σ tx_vl_sequence) does not include warm-up commits.
+ * so shared-queue CMC RX (Σ tx_vl_sequence) does not include warm-up commits.
  */
 void reset_tx_vl_sequences(void);
 

@@ -11,14 +11,14 @@ NUM_RX_CORES ?= 2
 TARGET_GBPS ?= 1.0
 USE_VLAN ?=1
 
-# VMC port-based statistics mode (1=VMC table, 0=Server port table)
-STATS_MODE_VMC ?= 1
+# CMC port-based statistics mode (1=CMC table, 0=Server port table)
+STATS_MODE_CMC ?= 1
 
 # ATE root directory (auto-detected at build time)
 ATE_ROOT := $(shell pwd)/AteCumulus/AteTestMode
 
 # Compiler flags
-CFLAGS = -O3 -march=native -flto -ffast-math -funroll-loops -Wextra -I$(INCDIR) -I$(INCDIR)/health_monitor -I$(SRCDIR) -DNUM_TX_CORES=$(NUM_TX_CORES) -DNUM_RX_CORES=$(NUM_RX_CORES) -DUSE_VLAN=$(USE_VLAN) -DTARGET_GBPS=$(TARGET_GBPS) -DSTATS_MODE_VMC=$(STATS_MODE_VMC) -DATE_ROOT=\"$(ATE_ROOT)\"
+CFLAGS = -O3 -march=native -flto -ffast-math -funroll-loops -Wextra -I$(INCDIR) -I$(INCDIR)/health_monitor -I$(SRCDIR) -DNUM_TX_CORES=$(NUM_TX_CORES) -DNUM_RX_CORES=$(NUM_RX_CORES) -DUSE_VLAN=$(USE_VLAN) -DTARGET_GBPS=$(TARGET_GBPS) -DSTATS_MODE_CMC=$(STATS_MODE_CMC) -DATE_ROOT=\"$(ATE_ROOT)\"
 DEBUG_CFLAGS = -g -O3 -DDEBUG -march=native -Wall -Wextra -I$(INCDIR) -I$(INCDIR)/health_monitor -I$(SRCDIR) -DATE_ROOT=\"$(ATE_ROOT)\"
 
 # Additional libraries (pthread for threading)

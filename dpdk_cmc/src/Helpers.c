@@ -7,7 +7,7 @@
 #include <rte_atomic.h>
 
 #include "Config.h"
-#include "Packet.h"       // for PACKET_SIZE (byte approximation for per-VMC stats)
+#include "Packet.h"       // for PACKET_SIZE (byte approximation for per-CMC stats)
 #include "TxRxManager.h"  // for rx_stats_per_port
 #include "AteMode.h"
 
@@ -23,8 +23,8 @@ static inline double to_gbps(uint64_t bytes) {
     return (bytes * 8.0) / 1e9;
 }
 
-#if STATS_MODE_VMC
-static void reset_vmc_prev_bytes(void);
+#if STATS_MODE_CMC
+static void reset_cmc_prev_bytes(void);
 #endif
 
 void helper_reset_stats(const struct ports_config *ports_config,
@@ -41,138 +41,138 @@ void helper_reset_stats(const struct ports_config *ports_config,
     // Reset RX validation statistics (PRBS) + per-VL sequence trackers
     init_rx_stats();
 
-    // Reset TX VL-ID commit counters so shared-queue VMC RX
+    // Reset TX VL-ID commit counters so shared-queue CMC RX
     // (Σ tx_vl_sequence) does not carry warm-up residue into the test window.
     reset_tx_vl_sequences();
 
-#if STATS_MODE_VMC
-    init_vmc_stats();
-    reset_vmc_prev_bytes();
+#if STATS_MODE_CMC
+    init_cmc_stats();
+    reset_cmc_prev_bytes();
 #endif
 }
 
-#if STATS_MODE_VMC
+#if STATS_MODE_CMC
 // ==========================================
-// VMC PORT-BASED STATISTICS - 2-TABLE DISPLAY (Net A / Net B)
+// CMC PORT-BASED STATISTICS - 2-TABLE DISPLAY (Net A / Net B)
 // ==========================================
 // CMC has exactly two flows. Each gets its own table; layout & columns are
-// the same as the legacy VMC tables (Good / Bad / SplitMix64 Fail / CRC32
+// the same as the legacy CMC tables (Good / Bad / SplitMix64 Fail / CRC32
 // Fail / Loss / Bit Error / BER) so the operator sees a familiar shape.
-// VMC TX (VMC→Server) = Server RX = HW q_ipackets[queue]
-// VMC RX (Server→VMC) = Server TX = HW q_opackets[queue]
-// PRBS = vmc_stats[vmc_port] (from RX worker)
+// CMC TX (CMC→Server) = Server RX = HW q_ipackets[queue]
+// CMC RX (Server→CMC) = Server TX = HW q_opackets[queue]
+// PRBS = cmc_stats[cmc_port] (from RX worker)
 
-// Per-VMC-port prev bytes for delta calculation
-static uint64_t vmc_prev_tx_bytes[VMC_PORT_COUNT];
-static uint64_t vmc_prev_rx_bytes[VMC_PORT_COUNT];
+// Per-CMC-port prev bytes for delta calculation
+static uint64_t cmc_prev_tx_bytes[CMC_PORT_COUNT];
+static uint64_t cmc_prev_rx_bytes[CMC_PORT_COUNT];
 
-// Zero the per-VMC prev-byte baselines. Invoked from helper_reset_stats at
+// Zero the per-CMC prev-byte baselines. Invoked from helper_reset_stats at
 // warm-up → test transition so the first test-window Gbps delta is computed
 // against zero, not the warm-up byte total.
-static void reset_vmc_prev_bytes(void)
+static void reset_cmc_prev_bytes(void)
 {
-    for (uint16_t i = 0; i < VMC_PORT_COUNT; i++) {
-        vmc_prev_tx_bytes[i] = 0;
-        vmc_prev_rx_bytes[i] = 0;
+    for (uint16_t i = 0; i < CMC_PORT_COUNT; i++) {
+        cmc_prev_tx_bytes[i] = 0;
+        cmc_prev_rx_bytes[i] = 0;
     }
 }
 
-// Count VMC flows that share the same server RX (queue) — used to decide
-// whether the HW per-queue counter is dedicated to this VMC (single flow)
+// Count CMC flows that share the same server RX (queue) — used to decide
+// whether the HW per-queue counter is dedicated to this CMC (single flow)
 // or must be split via the software per-VL-ID counters (shared queue).
-static uint16_t vmc_flows_on_srv_rx(uint16_t srv_rx_port, uint16_t srv_rx_queue)
+static uint16_t cmc_flows_on_srv_rx(uint16_t srv_rx_port, uint16_t srv_rx_queue)
 {
     uint16_t n = 0;
-    for (uint16_t i = 0; i < VMC_PORT_COUNT; i++) {
-        if (vmc_port_map[i].tx_server_port == srv_rx_port &&
-            vmc_port_map[i].tx_server_queue == srv_rx_queue) {
+    for (uint16_t i = 0; i < CMC_PORT_COUNT; i++) {
+        if (cmc_port_map[i].tx_server_port == srv_rx_port &&
+            cmc_port_map[i].tx_server_queue == srv_rx_queue) {
             n++;
         }
     }
     return n;
 }
 
-static uint16_t vmc_flows_on_srv_tx(uint16_t srv_tx_port, uint16_t srv_tx_queue)
+static uint16_t cmc_flows_on_srv_tx(uint16_t srv_tx_port, uint16_t srv_tx_queue)
 {
     uint16_t n = 0;
-    for (uint16_t i = 0; i < VMC_PORT_COUNT; i++) {
-        if (vmc_port_map[i].rx_server_port == srv_tx_port &&
-            vmc_port_map[i].rx_server_queue == srv_tx_queue) {
+    for (uint16_t i = 0; i < CMC_PORT_COUNT; i++) {
+        if (cmc_port_map[i].rx_server_port == srv_tx_port &&
+            cmc_port_map[i].rx_server_queue == srv_tx_queue) {
             n++;
         }
     }
     return n;
 }
 
-static void print_vmc_table_group(const uint16_t *indices, uint16_t count,
+static void print_cmc_table_group(const uint16_t *indices, uint16_t count,
                                   const struct rte_eth_stats port_hw_stats[])
 {
     // Payload Verification now has 8 stat columns (Good, Bad, SplitMix64
     // Fail, CRC32 Fail, XOR Fail, Loss, Bit Error, BER) — XOR Fail was added
-    // for the 1-byte XOR-zone check the VMC applies after CRC32.
+    // for the 1-byte XOR-zone check the CMC applies after CRC32.
     printf("  ┌─────────┬────────┬─────────────────────────────────────────────────────────────────────┬─────────────────────────────────────────────────────────────────────┬──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐\n");
-    printf("  │ Server  │  VMC   │                          VMC TX (VMC→Server)                        │                          VMC RX (Server→VMC)                        │                                                  Payload Verification                                                                                  │\n");
+    printf("  │ Server  │  CMC   │                          CMC TX (CMC→Server)                        │                          CMC RX (Server→CMC)                        │                                                  Payload Verification                                                                                  │\n");
     printf("  │  Port   │  Port  ├─────────────────────┬─────────────────────┬─────────────────────────┼─────────────────────┬─────────────────────┬─────────────────────────┼─────────────────────┬─────────────────────┬─────────────────────┬─────────────────────┬─────────────────────┬─────────────────────┬─────────────────────┬─────────────┤\n");
     printf("  │         │        │       Packets       │        Bytes        │          Gbps           │       Packets       │        Bytes        │          Gbps           │        Good         │         Bad         │  SplitMix64 Fail    │    CRC32 Fail       │      XOR Fail       │        Loss         │      Bit Error      │     BER     │\n");
     printf("  ├─────────┼────────┼─────────────────────┼─────────────────────┼─────────────────────────┼─────────────────────┼─────────────────────┼─────────────────────────┼─────────────────────┼─────────────────────┼─────────────────────┼─────────────────────┼─────────────────────┼─────────────────────┼─────────────────────┼─────────────┤\n");
 
     for (uint16_t i = 0; i < count; i++) {
-        uint16_t vmc = indices[i];
-        const struct vmc_port_map_entry *entry = &vmc_port_map[vmc];
+        uint16_t cmc = indices[i];
+        const struct cmc_port_map_entry *entry = &cmc_port_map[cmc];
 
         uint16_t srv_rx_port = entry->tx_server_port;
         uint16_t srv_rx_queue = entry->tx_server_queue;
         uint16_t srv_tx_port = entry->rx_server_port;
         uint16_t srv_tx_queue = entry->rx_server_queue;
 
-        uint64_t vmc_tx_pkts, vmc_tx_bytes;
-        uint64_t vmc_rx_pkts, vmc_rx_bytes;
+        uint64_t cmc_tx_pkts, cmc_tx_bytes;
+        uint64_t cmc_rx_pkts, cmc_rx_bytes;
 
-        // VMC TX (VMC→Server, server RX side).
-        // Use HW q_ipackets/q_ibytes when this VMC is the only flow on that
-        // RX queue; otherwise split via software per-VMC rx counters.
-        if (vmc_flows_on_srv_rx(srv_rx_port, srv_rx_queue) == 1) {
-            vmc_tx_pkts = port_hw_stats[srv_rx_port].q_ipackets[srv_rx_queue];
-            vmc_tx_bytes = port_hw_stats[srv_rx_port].q_ibytes[srv_rx_queue];
+        // CMC TX (CMC→Server, server RX side).
+        // Use HW q_ipackets/q_ibytes when this CMC is the only flow on that
+        // RX queue; otherwise split via software per-CMC rx counters.
+        if (cmc_flows_on_srv_rx(srv_rx_port, srv_rx_queue) == 1) {
+            cmc_tx_pkts = port_hw_stats[srv_rx_port].q_ipackets[srv_rx_queue];
+            cmc_tx_bytes = port_hw_stats[srv_rx_port].q_ibytes[srv_rx_queue];
         } else {
-            vmc_tx_pkts = rte_atomic64_read(&vmc_stats[vmc].total_rx_pkts);
-            vmc_tx_bytes = vmc_tx_pkts * (uint64_t)PACKET_SIZE;
+            cmc_tx_pkts = rte_atomic64_read(&cmc_stats[cmc].total_rx_pkts);
+            cmc_tx_bytes = cmc_tx_pkts * (uint64_t)PACKET_SIZE;
         }
 
-        // VMC RX (Server→VMC, server TX side).
+        // CMC RX (Server→CMC, server TX side).
         // Use HW q_opackets/q_obytes for dedicated queues; otherwise sum the
-        // per-VL-ID TX sequence counters over this VMC's TX range.
-        if (vmc_flows_on_srv_tx(srv_tx_port, srv_tx_queue) == 1) {
-            vmc_rx_pkts = port_hw_stats[srv_tx_port].q_opackets[srv_tx_queue];
-            vmc_rx_bytes = port_hw_stats[srv_tx_port].q_obytes[srv_tx_queue];
+        // per-VL-ID TX sequence counters over this CMC's TX range.
+        if (cmc_flows_on_srv_tx(srv_tx_port, srv_tx_queue) == 1) {
+            cmc_rx_pkts = port_hw_stats[srv_tx_port].q_opackets[srv_tx_queue];
+            cmc_rx_bytes = port_hw_stats[srv_tx_port].q_obytes[srv_tx_queue];
         } else {
             uint64_t sum = 0;
             for (uint16_t v = 0; v < entry->vl_id_count; v++) {
                 sum += get_tx_vl_sequence(srv_tx_port,
                                           (uint16_t)(entry->tx_vl_id_start + v));
             }
-            vmc_rx_pkts = sum;
-            vmc_rx_bytes = sum * (uint64_t)PACKET_SIZE;
+            cmc_rx_pkts = sum;
+            cmc_rx_bytes = sum * (uint64_t)PACKET_SIZE;
         }
 
         // Gbps delta calculation
-        uint64_t tx_delta = vmc_tx_bytes - vmc_prev_tx_bytes[vmc];
-        uint64_t rx_delta = vmc_rx_bytes - vmc_prev_rx_bytes[vmc];
+        uint64_t tx_delta = cmc_tx_bytes - cmc_prev_tx_bytes[cmc];
+        uint64_t rx_delta = cmc_rx_bytes - cmc_prev_rx_bytes[cmc];
         double tx_gbps = to_gbps(tx_delta);
         double rx_gbps = to_gbps(rx_delta);
 
         // Update prev values
-        vmc_prev_tx_bytes[vmc] = vmc_tx_bytes;
-        vmc_prev_rx_bytes[vmc] = vmc_rx_bytes;
+        cmc_prev_tx_bytes[cmc] = cmc_tx_bytes;
+        cmc_prev_rx_bytes[cmc] = cmc_rx_bytes;
 
         // Payload verification statistics
-        uint64_t good = rte_atomic64_read(&vmc_stats[vmc].good_pkts);
-        uint64_t bad = rte_atomic64_read(&vmc_stats[vmc].bad_pkts);
-        uint64_t sm_fail = rte_atomic64_read(&vmc_stats[vmc].splitmix_fail);
-        uint64_t crc_fail = rte_atomic64_read(&vmc_stats[vmc].crc32_fail);
-        uint64_t xor_fail = rte_atomic64_read(&vmc_stats[vmc].xor_fail);
-        uint64_t lost = rte_atomic64_read(&vmc_stats[vmc].lost_pkts);
-        uint64_t bit_errors_raw = rte_atomic64_read(&vmc_stats[vmc].bit_errors);
+        uint64_t good = rte_atomic64_read(&cmc_stats[cmc].good_pkts);
+        uint64_t bad = rte_atomic64_read(&cmc_stats[cmc].bad_pkts);
+        uint64_t sm_fail = rte_atomic64_read(&cmc_stats[cmc].splitmix_fail);
+        uint64_t crc_fail = rte_atomic64_read(&cmc_stats[cmc].crc32_fail);
+        uint64_t xor_fail = rte_atomic64_read(&cmc_stats[cmc].xor_fail);
+        uint64_t lost = rte_atomic64_read(&cmc_stats[cmc].lost_pkts);
+        uint64_t bit_errors_raw = rte_atomic64_read(&cmc_stats[cmc].bit_errors);
 
 #if IMIX_ENABLED
         uint64_t lost_bits = lost * (uint64_t)IMIX_AVG_PACKET_SIZE * 8;
@@ -182,23 +182,23 @@ static void print_vmc_table_group(const uint16_t *indices, uint16_t count,
         uint64_t bit_errors = bit_errors_raw + lost_bits;
 
         double ber = 0.0;
-        uint64_t total_bits = vmc_tx_bytes * 8 + lost_bits;
+        uint64_t total_bits = cmc_tx_bytes * 8 + lost_bits;
         if (total_bits > 0) {
             ber = (double)bit_errors / (double)total_bits;
         }
 
         printf("  │    %u    │ %-6s │ %19lu │ %19lu │ %23.4f │ %19lu │ %19lu │ %23.4f │ %19lu │ %19lu │ %19lu │ %19lu │ %19lu │ %19lu │ %19lu │ %11.2e │\n",
                entry->rx_server_port,
-               vmc_port_labels[vmc],
-               vmc_tx_pkts, vmc_tx_bytes, tx_gbps,
-               vmc_rx_pkts, vmc_rx_bytes, rx_gbps,
+               cmc_port_labels[cmc],
+               cmc_tx_pkts, cmc_tx_bytes, tx_gbps,
+               cmc_rx_pkts, cmc_rx_bytes, rx_gbps,
                good, bad, sm_fail, crc_fail, xor_fail, lost, bit_errors, ber);
     }
 
     printf("  └─────────┴────────┴─────────────────────┴─────────────────────┴─────────────────────────┴─────────────────────┴─────────────────────┴─────────────────────────┴─────────────────────┴─────────────────────┴─────────────────────┴─────────────────────┴─────────────────────┴─────────────────────┴─────────────────────┴─────────────┘\n");
 }
 
-static void helper_print_vmc_stats(const struct ports_config *ports_config,
+static void helper_print_cmc_stats(const struct ports_config *ports_config,
                                    bool warmup_complete, unsigned loop_count,
                                    unsigned test_time)
 {
@@ -214,9 +214,9 @@ static void helper_print_vmc_stats(const struct ports_config *ports_config,
     // Header
     printf("╔══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗\n");
     if (!warmup_complete) {
-        printf("║                                                              VMC PORT STATS - WARM-UP (%3u/120 sec)                                                                                                                                  ║\n", loop_count);
+        printf("║                                                              CMC PORT STATS - WARM-UP (%3u/120 sec)                                                                                                                                  ║\n", loop_count);
     } else {
-        printf("║                                                              VMC PORT STATS - TEST Duration: %5u sec                                                                                                                                 ║\n", test_time);
+        printf("║                                                              CMC PORT STATS - TEST Duration: %5u sec                                                                                                                                 ║\n", test_time);
     }
     printf("╚══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝\n");
 
@@ -231,21 +231,21 @@ static void helper_print_vmc_stats(const struct ports_config *ports_config,
 
     // Table 1: Network A (VLAN 97 → 225, SRC MAC tail 0x20)
     printf("\n  === Network A (VLAN 97 -> 225 | VL 10001..10104 -> 10521..10624 | SRC MAC tail 0x20) ===\n");
-    print_vmc_table_group(neta_vmc_indices, NETA_COUNT, port_hw_stats);
+    print_cmc_table_group(neta_cmc_indices, NETA_COUNT, port_hw_stats);
 
     // Table 2: Network B (VLAN 98 → 226, SRC MAC tail 0x40)
     printf("\n  === Network B (VLAN 98 -> 226 | VL 10001..10104 -> 10521..10624 | SRC MAC tail 0x40) ===\n");
-    print_vmc_table_group(netb_vmc_indices, NETB_COUNT, port_hw_stats);
+    print_cmc_table_group(netb_cmc_indices, NETB_COUNT, port_hw_stats);
 
     // Warnings
     bool has_warning = false;
-    for (uint16_t vmc = 0; vmc < VMC_DPDK_PORT_COUNT; vmc++) {
-        uint64_t bad = rte_atomic64_read(&vmc_stats[vmc].bad_pkts);
-        uint64_t sm_fail = rte_atomic64_read(&vmc_stats[vmc].splitmix_fail);
-        uint64_t crc_fail = rte_atomic64_read(&vmc_stats[vmc].crc32_fail);
-        uint64_t xor_fail = rte_atomic64_read(&vmc_stats[vmc].xor_fail);
-        uint64_t bit_err = rte_atomic64_read(&vmc_stats[vmc].bit_errors);
-        uint64_t lost = rte_atomic64_read(&vmc_stats[vmc].lost_pkts);
+    for (uint16_t cmc = 0; cmc < CMC_DPDK_PORT_COUNT; cmc++) {
+        uint64_t bad = rte_atomic64_read(&cmc_stats[cmc].bad_pkts);
+        uint64_t sm_fail = rte_atomic64_read(&cmc_stats[cmc].splitmix_fail);
+        uint64_t crc_fail = rte_atomic64_read(&cmc_stats[cmc].crc32_fail);
+        uint64_t xor_fail = rte_atomic64_read(&cmc_stats[cmc].xor_fail);
+        uint64_t bit_err = rte_atomic64_read(&cmc_stats[cmc].bit_errors);
+        uint64_t lost = rte_atomic64_read(&cmc_stats[cmc].lost_pkts);
 
         if (bad > 0 || bit_err > 0 || lost > 0) {
             if (!has_warning) {
@@ -253,18 +253,18 @@ static void helper_print_vmc_stats(const struct ports_config *ports_config,
                 has_warning = true;
             }
             if (bad > 0)
-                printf("      %s (VMC %u): %lu bad packets! (SM:%lu CRC:%lu XOR:%lu)\n",
-                       vmc_port_labels[vmc], vmc, bad, sm_fail, crc_fail, xor_fail);
+                printf("      %s (CMC %u): %lu bad packets! (SM:%lu CRC:%lu XOR:%lu)\n",
+                       cmc_port_labels[cmc], cmc, bad, sm_fail, crc_fail, xor_fail);
             if (bit_err > 0)
-                printf("      %s (VMC %u): %lu bit errors!\n", vmc_port_labels[vmc], vmc, bit_err);
+                printf("      %s (CMC %u): %lu bit errors!\n", cmc_port_labels[cmc], cmc, bit_err);
             if (lost > 0)
-                printf("      %s (VMC %u): %lu lost packets!\n", vmc_port_labels[vmc], vmc, lost);
+                printf("      %s (CMC %u): %lu lost packets!\n", cmc_port_labels[cmc], cmc, lost);
         }
     }
 
     printf("\n  Press Ctrl+C to stop\n");
 }
-#endif /* STATS_MODE_VMC */
+#endif /* STATS_MODE_CMC */
 
 // ==========================================
 // SERVER PORT-BASED STATISTICS TABLE (Legacy table)
@@ -396,21 +396,21 @@ static void helper_print_server_stats(const struct ports_config *ports_config,
 // ==========================================
 // PUBLIC API: helper_print_stats
 // ==========================================
-// Normal mode: 2-table VMC display (Network A / Network B)
+// Normal mode: 2-table CMC display (Network A / Network B)
 // ATE mode: Server port table (loopback)
 
 void helper_print_stats(const struct ports_config *ports_config,
                         const uint64_t prev_tx_bytes[], const uint64_t prev_rx_bytes[],
                         bool warmup_complete, unsigned loop_count, unsigned test_time)
 {
-#if STATS_MODE_VMC
+#if STATS_MODE_CMC
     if (ate_mode_enabled()) {
         // ATE mode: server port table (loopback)
         helper_print_server_stats(ports_config, prev_tx_bytes, prev_rx_bytes,
                                   warmup_complete, loop_count, test_time);
     } else {
-        // Normal mode: 2 tables (Network A / Network B) with VMC port-level stats
-        helper_print_vmc_stats(ports_config, warmup_complete, loop_count, test_time);
+        // Normal mode: 2 tables (Network A / Network B) with CMC port-level stats
+        helper_print_cmc_stats(ports_config, warmup_complete, loop_count, test_time);
         (void)prev_tx_bytes;
         (void)prev_rx_bytes;
     }

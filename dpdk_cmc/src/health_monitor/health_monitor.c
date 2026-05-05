@@ -1,5 +1,5 @@
 #include <health_monitor.h>
-#include <vmc_message_types.h>
+#include <cmc_message_types.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
@@ -24,7 +24,7 @@ typedef struct {
 } hm_pcs_slot_t;
 
 typedef struct {
-    vmc_pbit_data_t   data;
+    cmc_pbit_data_t   data;
     pthread_mutex_t   lock;
     bool              updated;
     uint64_t          update_count;
@@ -89,7 +89,7 @@ static volatile uint64_t g_hm_rx_short        = 0;
 static volatile uint64_t g_hm_rx_empty        = 0;  // boş CBIT paketleri (tx/rx total = 0)
 
 // CBIT paketlerinde "boşluk" kontrolü — traffic counter'ları tamamen sıfırsa
-// paket VMC tarafının henüz veri toplamadığı bir döngüde gönderildiğini
+// paket CMC tarafının henüz veri toplamadığı bir döngüde gönderildiğini
 // gösterir. Bu paketlerle slot'u güncellemiyoruz; dolu paketleri
 // ezmemeleri için updated bayrağı set edilmez.
 static inline bool dtn_sw_is_empty(const dtn_sw_cbit_report_t *d)
@@ -321,15 +321,15 @@ static void parse_dtn_sw(dtn_sw_cbit_report_t *dst, const uint8_t *payload)
     }
 }
 
-// VMC PBIT REPORT parse — wire 454 B (vmc_message_types.h:96-109).
+// CMC PBIT REPORT parse — wire 454 B (cmc_message_types.h:96-109).
 // Çok-byte alanların hepsi big-endian; bitfield'lar ve uint8 dizileri swap'siz.
 // Swap edilen alanlar:
 //   - header_st (msg_len uint16, timestamp uint64)
 //   - list[80].ret_val (int32 — policy_cmd uint8 swap'siz)
-//   - vmc_serial_number (uint32)
+//   - cmc_serial_number (uint32)
 //   - dtn_pbit_data_st içindeki üç fw_version'ın reserved_2 alanı (uint32)
 //   - vs_cpu_pbit, flcs_cpu_pbit (uint16)
-static void parse_vmc_pbit_data(vmc_pbit_data_t *dst, const uint8_t *payload)
+static void parse_cmc_pbit_data(cmc_pbit_data_t *dst, const uint8_t *payload)
 {
     memcpy(dst, payload, sizeof(*dst));
 
@@ -340,7 +340,7 @@ static void parse_vmc_pbit_data(vmc_pbit_data_t *dst, const uint8_t *payload)
         dst->list[i].ret_val = (int32_t)be32_to_host((uint32_t)dst->list[i].ret_val);
     }
 
-    dst->vmc_serial_number = be32_to_host(dst->vmc_serial_number);
+    dst->cmc_serial_number = be32_to_host(dst->cmc_serial_number);
 
     // dtn_pbit_data_st: üç fw_version struct'ı, her birinde 4-byte reserved_2 + 4 uint8.
     dst->dtn_pbit_data_st.mmp_dtn_es_fw_version.reserved_2 =
@@ -490,7 +490,7 @@ void hm_handle_packet(uint16_t vl_id, const uint8_t *payload, uint16_t len)
             // Uzunluk + msg_id filtresi: aynı VL-ID'ye PBIT olmayan trafik
             // gelebiliyor (ör. 1467 B'lik PRBS paketleri); sadece spec'e
             // uyanları slot'a yaz.
-            if (len < sizeof(vmc_pbit_data_t)) {
+            if (len < sizeof(cmc_pbit_data_t)) {
                 __atomic_add_fetch(&g_hm_rx_short, 1, __ATOMIC_RELAXED);
                 return;
             }
@@ -499,7 +499,7 @@ void hm_handle_packet(uint16_t vl_id, const uint8_t *payload, uint16_t len)
                 return;
             }
             pthread_mutex_lock(&flcs_pbit_slot.lock);
-            parse_vmc_pbit_data(&flcs_pbit_slot.data, payload);
+            parse_cmc_pbit_data(&flcs_pbit_slot.data, payload);
             flcs_pbit_slot.updated = true;
             flcs_pbit_slot.update_count++;
             pthread_mutex_unlock(&flcs_pbit_slot.lock);
@@ -507,7 +507,7 @@ void hm_handle_packet(uint16_t vl_id, const uint8_t *payload, uint16_t len)
             break;
 
         case HEALTH_MONITOR_VS_PBIT_RESPONSE_VLID:      // 0x000d
-            if (len < sizeof(vmc_pbit_data_t)) {
+            if (len < sizeof(cmc_pbit_data_t)) {
                 __atomic_add_fetch(&g_hm_rx_short, 1, __ATOMIC_RELAXED);
                 return;
             }
@@ -516,7 +516,7 @@ void hm_handle_packet(uint16_t vl_id, const uint8_t *payload, uint16_t len)
                 return;
             }
             pthread_mutex_lock(&vs_pbit_slot.lock);
-            parse_vmc_pbit_data(&vs_pbit_slot.data, payload);
+            parse_cmc_pbit_data(&vs_pbit_slot.data, payload);
             vs_pbit_slot.updated = true;
             vs_pbit_slot.update_count++;
             pthread_mutex_unlock(&vs_pbit_slot.lock);
@@ -557,7 +557,7 @@ static bool drain_and_print_pcs_slot(hm_pcs_slot_t *slot, const char *device_nam
 static bool drain_and_print_pbit_slot(hm_pbit_slot_t *slot, const char *device_name)
 {
     bool has_data = false;
-    vmc_pbit_data_t local;
+    cmc_pbit_data_t local;
 
     pthread_mutex_lock(&slot->lock);
     if (slot->updated) {
@@ -567,7 +567,7 @@ static bool drain_and_print_pbit_slot(hm_pbit_slot_t *slot, const char *device_n
     pthread_mutex_unlock(&slot->lock);
 
     if (has_data) {
-        print_vmc_pbit_report(&local, device_name);
+        print_cmc_pbit_report(&local, device_name);
     }
     return has_data;
 }
@@ -695,7 +695,7 @@ void hm_print_dashboard(void)
 // ============================================================================
 
 // 1. VMP PBIT REPORT
-void print_vmc_pbit_report(const vmc_pbit_data_t *data, const char *device_name)
+void print_cmc_pbit_report(const cmc_pbit_data_t *data, const char *device_name)
 {
     if (!data) return;
 
@@ -707,7 +707,7 @@ void print_vmc_pbit_report(const vmc_pbit_data_t *data, const char *device_name)
 
     printf("[ GENERAL INFO ]\n");
     printf(" LRU ID            : %u\n", data->lru_id);
-    printf(" VMC Serial Number : %u\n", data->vmc_serial_number);
+    printf(" CMC Serial Number : %u\n", data->cmc_serial_number);
     printf(" FLCS CPU PBIT     : 0x%04X\n", data->flcs_cpu_pbit);
     printf(" VS CPU PBIT       : 0x%04X\n", data->vs_cpu_pbit);
     printf(" Msg Identifier    : 0x%02X | Length: %u bytes\n", data->header_st.message_identifier, data->header_st.message_len);
@@ -879,8 +879,8 @@ void print_bm_cbit_report(const bm_engineering_cbit_report_t *data, const char *
     bm_row("DTN_FSW_BM_ADC_3V_2",              fs->DTN_FSW_BM_ADC_3V_2);
     bm_section_footer();
 
-    const bm_vmc_board_status_data_t *b = &data->vmc_board_status_st;
-    bm_section_header("VMC BOARD STATUS DATA (7 fields)");
+    const bm_cmc_board_status_data_t *b = &data->cmc_board_status_st;
+    bm_section_header("CMC BOARD STATUS DATA (7 fields)");
     bm_row("PSM_PWR_PRI_VOLS",                 b->PSM_PWR_PRI_VOLS);
     bm_row("PSM_PWR_SEC_VOLS",                 b->PSM_PWR_SEC_VOLS);
     bm_row("PSM_INPUT_CURS",                   b->PSM_INPUT_CURS);

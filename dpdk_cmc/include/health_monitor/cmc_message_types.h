@@ -1,5 +1,5 @@
-#ifndef VMC_MESSAGE_TYPES_H
-#define VMC_MESSAGE_TYPES_H
+#ifndef CMC_MESSAGE_TYPES_H
+#define CMC_MESSAGE_TYPES_H
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -100,13 +100,13 @@ typedef struct __attribute__((packed))
     uint8_t                  policy_steps_exec_status;       // Byte 13         | 1 byte
     policy_step_exec_t       list[80];                       // Byte 14  - 413  | 400 byte
     bm_cd_firmware_version_t bm_cd_firmware_version_st;      // Byte 414 - 417  | 4 byte
-    uint32_t                 vmc_serial_number;              // Byte 418 - 421  | 4 byte
+    uint32_t                 cmc_serial_number;              // Byte 418 - 421  | 4 byte
     dtn_pbit_data_t          dtn_pbit_data_st;               // Byte 422 - 445  | 24 byte
     vmp_cmsw_lib_ver_t       vmp_cmsw_lib_ver;               // Byte 446 - 448  | 3 byte
     vmp_storage_and_status_t vmp_storage_and_status_st;      // Byte 449        | 1 byte
     uint16_t                 vs_cpu_pbit;                    // Byte 450 - 451  | 2 byte
     uint16_t                 flcs_cpu_pbit;                  // Byte 452 - 453  | 2 byte
-} vmc_pbit_data_t;                                           // TOPLAM: 454 byte                                   
+} cmc_pbit_data_t;                                           // TOPLAM: 454 byte                                   
 
 // ============================================================================
 // 
@@ -233,7 +233,7 @@ typedef struct __attribute__((packed))
     float BM_FPGA_temperature;                  // Byte 385 - 388  | 4 byte
     float Board_edge_temperature;               // Byte 389 - 392  | 4 byte
     float BRD_MNGR_12V_main_current;            // Byte 393 - 396  | 4 byte
-} bm_vmc_board_status_data_t;                   // TOPLAM: 28 byte
+} bm_cmc_board_status_data_t;                   // TOPLAM: 28 byte
 
 
 typedef struct __attribute__((packed)) 
@@ -246,7 +246,7 @@ typedef struct __attribute__((packed))
     bm_dtn_es_status_data_t      dtn_es_status_st;       // Byte 189 - 248  | 60 byte
     bm_vs_dtn_sw_status_data_t   vs_dtn_sw_status_st;    // Byte 249 - 308  | 60 byte
     bm_flcs_dtn_sw_status_data_t flcs_dtn_sw_status_st;  // Byte 309 - 368  | 60 byte
-    bm_vmc_board_status_data_t   vmc_board_status_st;    // Byte 369 - 396  | 28 byte
+    bm_cmc_board_status_data_t   cmc_board_status_st;    // Byte 369 - 396  | 28 byte
 } bm_engineering_cbit_report_t;                          // TOPLAM: 397 byte
 
 // ============================================================================
@@ -574,7 +574,7 @@ typedef struct __attribute__((packed))
 //   - Port struct 16 u64 counter yerine 15 u64 counter içeriyor
 //     (son counter'ın "SPEED" olduğu kanıtlandı; eksik olan counter
 //     tanımsız, aşağıda `reserved_u64_unknown` olarak işaretlendi —
-//     VMC tarafıyla senkron sağlandığında gerçek adı konacak).
+//     CMC tarafıyla senkron sağlandığında gerçek adı konacak).
 typedef struct __attribute__((packed))
 {
     uint64_t A664_SW_TX_TOTAL_COUNT;                            // 0   - 7    | 8 byte
@@ -614,7 +614,7 @@ typedef struct __attribute__((packed))
     uint64_t A664_SW_PORT_i_LOW_PRTY_QUE_OVRFLW_COUNT;          // 100 - 107  | 8 byte
     // NOT: Dokümandaki A664_SW_PORT_i_BE_QUE_OVRFLW_COUNT bu konumda
     // bekleniyordu ama wire formatta yok — sahadan doğrulanana kadar
-    // reserved olarak kalıyor. (VMC kodu gelince gerçek adı konacak.)
+    // reserved olarak kalıyor. (CMC kodu gelince gerçek adı konacak.)
     uint64_t A664_SW_PORT_i_MAX_DELAY;                          // 108 - 115  | 8 byte
     uint64_t A664_SW_PORT_i_SPEED;                              // 116 - 123  | 8 byte (wire son alan = SPEED, doğrulandı)
 } dtn_sw_port_mon_t;                                            // TOPLAM: 124 byte (8 port × 124 = 992 byte)
@@ -676,4 +676,4 @@ typedef struct Pcs_profile_stats
     Pcs_mem_profile_type   stack_mem;                           // Byte 112  - 135  | 24 byte
 } Pcs_profile_stats;                                            // TOPLAM: 136 byte
 
-#endif /* VMC_MESSAGE_TYPES_H */
+#endif /* CMC_MESSAGE_TYPES_H */
