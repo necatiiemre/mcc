@@ -396,24 +396,21 @@ static void helper_print_server_stats(const struct ports_config *ports_config,
 // ==========================================
 // PUBLIC API: helper_print_stats
 // ==========================================
-// Normal mode: 2-table CMC display (Network A / Network B)
-// ATE mode: Server port table (loopback)
+// CMC mode (STATS_MODE_CMC=1): per-network 2-table CMC display (Net A / Net B).
+// Both ATE mode and unit-test mode use the same layout — the only difference
+// is verification semantics, which are captured in the same per-CMC counters
+// (Good/Bad/Lost/Bit Error). The SplitMix64 / CRC32 / XOR Fail columns stay
+// at zero in ATE mode by design (the pure-PRBS path doesn't touch them).
+// Legacy (STATS_MODE_CMC=0): single port-aggregate table.
 
 void helper_print_stats(const struct ports_config *ports_config,
                         const uint64_t prev_tx_bytes[], const uint64_t prev_rx_bytes[],
                         bool warmup_complete, unsigned loop_count, unsigned test_time)
 {
 #if STATS_MODE_CMC
-    if (ate_mode_enabled()) {
-        // ATE mode: server port table (loopback)
-        helper_print_server_stats(ports_config, prev_tx_bytes, prev_rx_bytes,
-                                  warmup_complete, loop_count, test_time);
-    } else {
-        // Normal mode: 2 tables (Network A / Network B) with CMC port-level stats
-        helper_print_cmc_stats(ports_config, warmup_complete, loop_count, test_time);
-        (void)prev_tx_bytes;
-        (void)prev_rx_bytes;
-    }
+    helper_print_cmc_stats(ports_config, warmup_complete, loop_count, test_time);
+    (void)prev_tx_bytes;
+    (void)prev_rx_bytes;
 #else
     helper_print_server_stats(ports_config, prev_tx_bytes, prev_rx_bytes,
                               warmup_complete, loop_count, test_time);
