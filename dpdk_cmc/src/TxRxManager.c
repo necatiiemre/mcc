@@ -1346,12 +1346,22 @@ int tx_worker(void *arg)
     // Local packet counter for this worker
     uint64_t local_pkt_counter = 0;
 
+    // Each pacing tick emits one packet on the legacy single-queue path and
+    // two (Net A + Net B twin) in dual-net mode. The TX_TEST limit and the
+    // shared per-port packet counter both have to be charged accordingly so
+    // TX_MAX_PACKETS_PER_PORT keeps its plain "total packets sent on this
+    // port" meaning (rather than counting ticks).
+    const uint16_t tick_packets = params->dual_net ? 2 : 1;
+
     while (!(*params->stop_flag))
     {
 #if TX_TEST_MODE_ENABLED
-        // Check if port reached max packet limit
+        // Check if port reached max packet limit. Stop one tick early when
+        // emitting another tick's worth of packets would push us past the
+        // limit — this avoids sending a half pair (Net A without its Net B
+        // twin) or overshooting the configured cap.
         uint64_t current_port_count = rte_atomic64_read(&tx_packet_count_per_port[params->port_id]);
-        if (current_port_count >= TX_MAX_PACKETS_PER_PORT)
+        if (current_port_count + tick_packets > TX_MAX_PACKETS_PER_PORT)
         {
             if (__sync_val_compare_and_swap(&tx_shutdown_triggered, 0, 1) == 0)
             {
@@ -1435,13 +1445,18 @@ int tx_worker(void *arg)
 
 #if TX_TEST_MODE_ENABLED
         uint64_t port_count = rte_atomic64_read(&tx_packet_count_per_port[params->port_id]);
-        if (port_count >= TX_MAX_PACKETS_PER_PORT)
+        if (port_count + tick_packets > TX_MAX_PACKETS_PER_PORT)
         {
             rte_pktmbuf_free(pkt);
             continue;
         }
-        uint64_t pkt_num = rte_atomic64_add_return(&tx_packet_count_per_port[params->port_id], 1);
-        local_pkt_counter++;
+        // Charge the counter for both the Net A and Net B packet of this tick
+        // (or just one in single-queue mode). pkt_num names the count *after*
+        // this tick's contribution, so the SKIP modulo below behaves the
+        // same way regardless of dual-net mode.
+        uint64_t pkt_num = rte_atomic64_add_return(&tx_packet_count_per_port[params->port_id],
+                                                    tick_packets);
+        local_pkt_counter += tick_packets;
 
         if (pkt_num % TX_SKIP_EVERY_N_PACKETS == 0)
         {
