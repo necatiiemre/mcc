@@ -1129,22 +1129,10 @@ int init_port_txrx(uint16_t port_id, struct txrx_config *config)
     }
 #endif
 
-    // Promiscuous mode is intentionally NOT enabled on the CMC port. With
-    // Mellanox MLX5 (ConnectX-4/5/6) the embedded e-switch echoes multicast
-    // TX packets back via the internal loopback path when promisc is on,
-    // producing the duplicate frames seen in wireshark captures. Our DST
-    // MAC has the I/G bit set (0x03 first byte) and DST IP is in the
-    // 224.224.x.y range — both classify as multicast, so the only safe way
-    // to keep CMC firmware's expected addressing AND avoid the duplicate
-    // is to leave promisc off and rely on the rte_flow VLAN→queue rules
-    // installed below for RX classification. Re-enabling this requires a
-    // matching MLX5 e-switch suppression (e.g. dv_flow_en=0 PMD arg) or
-    // the duplicates will reappear.
-    ret = rte_eth_allmulticast_disable(port_id);
+    ret = rte_eth_promiscuous_enable(port_id);
     if (ret != 0)
     {
-        printf("Warning: Cannot disable allmulticast for port %u (rc=%d)\n",
-               port_id, ret);
+        printf("Warning: Cannot enable promiscuous mode for port %u\n", port_id);
     }
 
     printf("Port %u started successfully\n", port_id);
