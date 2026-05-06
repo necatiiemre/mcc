@@ -1511,6 +1511,10 @@ int tx_worker(void *arg)
             }
             struct packet_config cfg_b = cfg;
             cfg_b.vlan_id = params->alt_vlan_id;
+            // Net B carries its own SRC MAC tail (0x40 in the default CMC
+            // config) so the L2 framing matches what the peer expects per
+            // network. Everything else in cfg_b stays inherited from Net A.
+            cfg_b.src_mac.addr_bytes[5] = params->alt_src_mac_tail;
 #if IMIX_ENABLED
             build_packet_dynamic(pkt_b, &cfg_b, pkt_size);
             fill_payload_with_prbs31_dynamic(pkt_b, params->port_id, seq, l2_len, prbs_len);
@@ -2310,6 +2314,7 @@ int start_txrx_workers(struct ports_config *ports_config, volatile bool *stop_fl
         tx_params[tx_param_idx].dual_net = true;
         tx_params[tx_param_idx].alt_queue_id = 1;
         tx_params[tx_param_idx].alt_vlan_id  = tx_vlan_b;
+        tx_params[tx_param_idx].alt_src_mac_tail = CMC_NET_B_SRC_MAC_TAIL;  // 0x40
 #if TOKEN_BUCKET_TX_ENABLED
         tx_params[tx_param_idx].nb_ports = ports_config->nb_ports;
 #endif
@@ -2332,9 +2337,11 @@ int start_txrx_workers(struct ports_config *ports_config, volatile bool *stop_fl
         // value stored here is just the Net A primary.
         tx_params[tx_param_idx].pkt_config.vlan_id = tx_vlan_a;
 #endif
-        // Both packets carry the same SRC MAC (Net A's 0x20 tail). The
-        // network is identified on RX purely by the 802.1Q VLAN tag —
-        // CMC_NET_B_SRC_MAC_TAIL (0x40) is intentionally unused now.
+        // pkt_config carries Net A's SRC MAC tail (0x20). The dual-net path
+        // in tx_worker overrides byte 5 with alt_src_mac_tail (0x40) when
+        // building the Net B twin, so each network ends up with its own
+        // L2 SRC identity while VL-ID / seq / DTN_SEQ / PRBS payload stay
+        // byte-identical across the pair.
         uint8_t src_mac_tail = CMC_NET_A_SRC_MAC_TAIL;
         tx_params[tx_param_idx].pkt_config.src_mac.addr_bytes[0] = 0x02;
         tx_params[tx_param_idx].pkt_config.src_mac.addr_bytes[1] = 0x00;
@@ -2349,13 +2356,15 @@ int start_txrx_workers(struct ports_config *ports_config, volatile bool *stop_fl
         tx_params[tx_param_idx].pkt_config.dst_port = DEFAULT_DST_PORT;
         tx_params[tx_param_idx].pkt_config.ttl = DEFAULT_TTL;
 
-        printf("  TX Worker (dual-net) -> Lcore %2u | VLAN %u (Net A, q0) + "
-               "VLAN %u (Net B, q1) | VL RANGE [%u..%u) | "
-               "Rate=%.4fGbps per network | SRC MAC tail=0x%02X\n",
-               lcore_id, tx_vlan_a, tx_vlan_b,
+        printf("  TX Worker (dual-net) -> Lcore %2u | "
+               "Net A: VLAN %u q0 SRC=0x%02X | Net B: VLAN %u q1 SRC=0x%02X | "
+               "VL RANGE [%u..%u) | Rate=%.4fGbps per network\n",
+               lcore_id,
+               tx_vlan_a, src_mac_tail,
+               tx_vlan_b, CMC_NET_B_SRC_MAC_TAIL,
                get_tx_vl_id_range_start(port_id, 0),
                get_tx_vl_id_range_end(port_id, 0),
-               this_queue_gbps, src_mac_tail);
+               this_queue_gbps);
 
         int ret = rte_eal_remote_launch(tx_worker,
                                         &tx_params[tx_param_idx],

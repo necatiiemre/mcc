@@ -199,15 +199,18 @@ struct tx_worker_params
     uint16_t cross_vl_count;
     double   cross_gbps;
 
-    // Dual-network mode: a single TX worker emits the same (VL-ID, seq, payload)
-    // on two queues — Net A on `queue_id` (with `vlan_id`) and Net B on
-    // `alt_queue_id` (with `alt_vlan_id`). Both packets are byte-identical
-    // except for the 802.1Q VLAN tag, so the receiver can compare what came
+    // Dual-network mode: a single TX worker emits twin packets — Net A on
+    // `queue_id` (with `vlan_id` and the SRC MAC tail baked into pkt_config)
+    // and Net B on `alt_queue_id` (with `alt_vlan_id` and `alt_src_mac_tail`
+    // overriding the last byte of SRC MAC). Everything else — VL-ID, the
+    // 8-byte sequence, DTN_SEQ, the PRBS payload, DST MAC, IPs — stays
+    // byte-identical across the pair so the receiver can compare what came
     // back on each network. When `dual_net` is false the worker takes the
     // legacy single-queue path.
     bool     dual_net;
     uint16_t alt_queue_id;
     uint16_t alt_vlan_id;
+    uint8_t  alt_src_mac_tail;
 };
 
 /**
