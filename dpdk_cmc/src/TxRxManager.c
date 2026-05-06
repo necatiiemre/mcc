@@ -148,7 +148,7 @@ static struct rte_flow *cmc_flow_handles[MAX_PORTS][CMC_MAX_FLOW_RULES_PER_PORT]
 #endif /* STATS_MODE_CMC */
 
 // Global VL-ID sequence trackers per port (for RX validation)
-struct port_vl_tracker port_vl_trackers[MAX_PORTS];
+struct port_vl_tracker port_vl_trackers[MAX_PORTS][CMC_PORT_COUNT];
 
 // Per-port, per-VL-ID TX sequence counter
 struct tx_vl_sequence
@@ -524,14 +524,19 @@ void init_rx_stats(void)
         rte_atomic64_init(&rx_stats_per_port[i].short_pkts);
         rte_atomic64_init(&rx_stats_per_port[i].external_pkts);
 
-        // Initialize VL-ID sequence trackers (lock-free, watermark-based)
-        for (int vl = 0; vl <= MAX_VL_ID; vl++)
+        // Initialize VL-ID sequence trackers (lock-free, watermark-based).
+        // Per-(port, CMC port) so Net A and Net B keep independent state for
+        // the same VL-ID range.
+        for (uint16_t cmc = 0; cmc < CMC_PORT_COUNT; cmc++)
         {
-            port_vl_trackers[i].vl_trackers[vl].max_seq = 0;
-            port_vl_trackers[i].vl_trackers[vl].min_seq = 0;
-            port_vl_trackers[i].vl_trackers[vl].pkt_count = 0;
-            port_vl_trackers[i].vl_trackers[vl].expected_seq = 0;
-            port_vl_trackers[i].vl_trackers[vl].initialized = 0;  // 0=false, 1=true
+            for (int vl = 0; vl <= MAX_VL_ID; vl++)
+            {
+                port_vl_trackers[i][cmc].vl_trackers[vl].max_seq = 0;
+                port_vl_trackers[i][cmc].vl_trackers[vl].min_seq = 0;
+                port_vl_trackers[i][cmc].vl_trackers[vl].pkt_count = 0;
+                port_vl_trackers[i][cmc].vl_trackers[vl].expected_seq = 0;
+                port_vl_trackers[i][cmc].vl_trackers[vl].initialized = 0;
+            }
         }
     }
     printf("RX statistics and VL-ID sequence trackers initialized for all ports\n");
@@ -1487,7 +1492,36 @@ int tx_worker(void *arg)
         fill_payload_with_prbs31(pkt, params->port_id, seq, l2_len);
 #endif
 
-        // Send single packet
+        // ==========================================
+        // DUAL-NET MODE: build the Net B twin
+        // ==========================================
+        // Same (VL-ID, seq, payload, src/dst MAC, IPs); only the 802.1Q VLAN
+        // tag differs. The two packets are pushed to their respective queues
+        // back-to-back so they leave the NIC as close as the on-chip arbiter
+        // allows.
+        struct rte_mbuf *pkt_b = NULL;
+        if (params->dual_net) {
+            pkt_b = rte_pktmbuf_alloc(params->mbuf_pool);
+            if (unlikely(pkt_b == NULL)) {
+                // Couldn't get a twin — drop the primary too so the (VL-ID,
+                // seq) pair stays locked across networks. No commit; same
+                // seq retried next tick.
+                rte_pktmbuf_free(pkt);
+                continue;
+            }
+            struct packet_config cfg_b = cfg;
+            cfg_b.vlan_id = params->alt_vlan_id;
+#if IMIX_ENABLED
+            build_packet_dynamic(pkt_b, &cfg_b, pkt_size);
+            fill_payload_with_prbs31_dynamic(pkt_b, params->port_id, seq, l2_len, prbs_len);
+#else
+            build_packet_mbuf(pkt_b, &cfg_b);
+            fill_payload_with_prbs31(pkt_b, params->port_id, seq, l2_len);
+#endif
+        }
+
+        // Send Net A first; if its queue is full we drop the twin too and
+        // keep both networks aligned on the next attempt.
         uint16_t nb_tx = rte_eth_tx_burst(params->port_id, params->queue_id, &pkt, 1);
 
         if (unlikely(!first_pkt_sent && nb_tx > 0))
@@ -1499,6 +1533,18 @@ int tx_worker(void *arg)
 
         if (likely(nb_tx > 0))
         {
+            uint16_t nb_tx_b = 1;
+            if (params->dual_net) {
+                nb_tx_b = rte_eth_tx_burst(params->port_id,
+                                           params->alt_queue_id, &pkt_b, 1);
+                if (unlikely(nb_tx_b == 0)) {
+                    // Net A is already on the wire; commit so its seq advances
+                    // monotonically. Net B will see a one-packet gap which the
+                    // RX side will report as loss for Net B. Free the unsent
+                    // twin.
+                    rte_pktmbuf_free(pkt_b);
+                }
+            }
             // Increment sequence only after packet is successfully sent
             commit_tx_sequence(params->port_id, curr_vl);
         }
@@ -1507,6 +1553,9 @@ int tx_worker(void *arg)
             // TX queue full — drop packet but do not increment sequence
             // The same sequence will be reused on the next attempt
             rte_pktmbuf_free(pkt);
+            if (params->dual_net && pkt_b != NULL) {
+                rte_pktmbuf_free(pkt_b);
+            }
         }
 
         if (!dual_lane) {
@@ -1594,8 +1643,18 @@ int rx_worker(void *arg)
 
     bool first_good = false, first_bad = false;
 
-    // Get VL-ID tracker for this port
-    struct port_vl_tracker *vl_tracker = &port_vl_trackers[params->port_id];
+    // Per-(port, CMC port) tracker. Each RX worker is bound to one queue,
+    // and the rte_flow rule pins one VLAN (= one CMC port) to that queue,
+    // so the worker uses a single tracker for its lifetime.
+    const uint16_t worker_cmc_port =
+        (params->port_id < MAX_PORTS &&
+         params->queue_id < NUM_RX_QUEUES_PER_PORT)
+            ? queue_to_cmc_port[params->port_id][params->queue_id]
+            : (uint16_t)CMC_QUEUE_INVALID;
+    struct port_vl_tracker *vl_tracker =
+        (worker_cmc_port < CMC_PORT_COUNT)
+            ? &port_vl_trackers[params->port_id][worker_cmc_port]
+            : &port_vl_trackers[params->port_id][0];
 
     const uint16_t INNER_LOOPS = 8;
 
@@ -2209,110 +2268,109 @@ int start_txrx_workers(struct ports_config *ports_config, volatile bool *stop_fl
 
         printf("\n--- Port %u TX (Sending to Port %u) ---\n", port_id, paired_port_id);
 
-        for (uint16_t q = 0; q < NUM_TX_CORES; q++)
+        // Dual-network mode: a single TX worker drives BOTH Net A and Net B
+        // from one lcore. The same (VL-ID, seq, payload, SRC/DST MAC, IPs)
+        // lands on queue 0 (VLAN 97) and queue 1 (VLAN 98) within the same
+        // pacing tick — only the 802.1Q tag differs. The second TX core
+        // would otherwise sit idle; we leave it unused (no second launch).
+        const uint16_t q = 0;
+        uint16_t lcore_id = port->used_tx_cores[q];
+
+        if (lcore_id == 0 || lcore_id >= RTE_MAX_LCORE)
         {
-            uint16_t lcore_id = port->used_tx_cores[q];
+            printf("Warning: Invalid TX lcore %u for port %u queue %u\n",
+                   lcore_id, port_id, q);
+            continue;
+        }
 
-            if (lcore_id == 0 || lcore_id >= RTE_MAX_LCORE)
-            {
-                printf("Warning: Invalid TX lcore %u for port %u queue %u\n",
-                       lcore_id, port_id, q);
-                continue;
-            }
+        double port_target_gbps = TARGET_GBPS;
 
-            double port_target_gbps = TARGET_GBPS;
+        // Per-network rate: same as the legacy split (TARGET_GBPS / 2). The
+        // dual-net worker fires once per pacing tick and emits two packets
+        // — one on each queue — so the combined wire rate equals
+        // TARGET_GBPS, matching the previous two-worker setup.
+        double this_queue_gbps = port_target_gbps / (double)NUM_TX_CORES;
+        init_rate_limiter(&tx_params[tx_param_idx].limiter, this_queue_gbps, 1);
+        tx_params[tx_param_idx].loopback_vl_start = 0;
+        tx_params[tx_param_idx].loopback_vl_count = 0;
+        tx_params[tx_param_idx].loopback_gbps     = 0.0;
+        tx_params[tx_param_idx].cross_vl_start    = 0;
+        tx_params[tx_param_idx].cross_vl_count    = 0;
+        tx_params[tx_param_idx].cross_gbps        = 0.0;
 
-            // CMC has a single rate target, split evenly across the two TX
-            // queues (Net A and Net B). The pure-PRBS cross flows are gone
-            // along with their dedicated CROSS_TARGET_GBPS knob; zero out the
-            // dual-lane fields so tx_worker takes the simple single-lane
-            // round-robin path.
-            double this_queue_gbps = port_target_gbps / (double)NUM_TX_CORES;
-            init_rate_limiter(&tx_params[tx_param_idx].limiter, this_queue_gbps, 1);
-            tx_params[tx_param_idx].loopback_vl_start = 0;
-            tx_params[tx_param_idx].loopback_vl_count = 0;
-            tx_params[tx_param_idx].loopback_gbps     = 0.0;
-            tx_params[tx_param_idx].cross_vl_start    = 0;
-            tx_params[tx_param_idx].cross_vl_count    = 0;
-            tx_params[tx_param_idx].cross_gbps        = 0.0;
+        uint16_t tx_vlan_a = get_tx_vlan_for_queue(port_id, 0);
+        uint16_t tx_vlan_b = get_tx_vlan_for_queue(port_id, 1);
 
-            uint16_t tx_vlan = get_tx_vlan_for_queue(port_id, q);
-
-            tx_params[tx_param_idx].port_id = port_id;
-            tx_params[tx_param_idx].dst_port_id = paired_port_id;
-            tx_params[tx_param_idx].queue_id = q;
-            tx_params[tx_param_idx].lcore_id = lcore_id;
-            tx_params[tx_param_idx].vlan_id = tx_vlan;
-            tx_params[tx_param_idx].stop_flag = stop_flag;
+        tx_params[tx_param_idx].port_id = port_id;
+        tx_params[tx_param_idx].dst_port_id = paired_port_id;
+        tx_params[tx_param_idx].queue_id = q;
+        tx_params[tx_param_idx].lcore_id = lcore_id;
+        tx_params[tx_param_idx].vlan_id = tx_vlan_a;
+        tx_params[tx_param_idx].stop_flag = stop_flag;
+        tx_params[tx_param_idx].dual_net = true;
+        tx_params[tx_param_idx].alt_queue_id = 1;
+        tx_params[tx_param_idx].alt_vlan_id  = tx_vlan_b;
 #if TOKEN_BUCKET_TX_ENABLED
-            tx_params[tx_param_idx].nb_ports = ports_config->nb_ports;
+        tx_params[tx_param_idx].nb_ports = ports_config->nb_ports;
 #endif
 
-            char pool_name[32];
-            snprintf(pool_name, sizeof(pool_name), "mbuf_pool_%u_%u",
-                     port->numa_node, port_id);
-            tx_params[tx_param_idx].mbuf_pool = rte_mempool_lookup(pool_name);
-            if (tx_params[tx_param_idx].mbuf_pool == NULL)
-            {
-                printf("Error: Cannot find mbuf pool for port %u\n", port_id);
-                return -1;
-            }
+        char pool_name[32];
+        snprintf(pool_name, sizeof(pool_name), "mbuf_pool_%u_%u",
+                 port->numa_node, port_id);
+        tx_params[tx_param_idx].mbuf_pool = rte_mempool_lookup(pool_name);
+        if (tx_params[tx_param_idx].mbuf_pool == NULL)
+        {
+            printf("Error: Cannot find mbuf pool for port %u\n", port_id);
+            return -1;
+        }
 
-            init_packet_config(&tx_params[tx_param_idx].pkt_config);
+        init_packet_config(&tx_params[tx_param_idx].pkt_config);
 
 #if VLAN_ENABLED
-            tx_params[tx_param_idx].pkt_config.vlan_id = tx_vlan;
+        // The per-mbuf VLAN tag is set inside tx_worker (Net A uses
+        // pkt_config.vlan_id, Net B overrides it with alt_vlan_id), so the
+        // value stored here is just the Net A primary.
+        tx_params[tx_param_idx].pkt_config.vlan_id = tx_vlan_a;
 #endif
-            // SRC MAC last byte tags the network type: 0x20 = Network A
-            // (VLAN 97), 0x40 = Network B (VLAN 98). Any other VLAN keeps
-            // the legacy 0x20 default — no current flow exercises that
-            // branch but it's a safer fallback than zero.
-            uint8_t src_mac_tail;
-            if (tx_vlan == 97) {
-                src_mac_tail = CMC_NET_A_SRC_MAC_TAIL;  // 0x20
-            } else if (tx_vlan == 98) {
-                src_mac_tail = CMC_NET_B_SRC_MAC_TAIL;  // 0x40
-            } else {
-                src_mac_tail = CMC_NET_A_SRC_MAC_TAIL;  // legacy default
-            }
-            tx_params[tx_param_idx].pkt_config.src_mac.addr_bytes[0] = 0x02;
-            tx_params[tx_param_idx].pkt_config.src_mac.addr_bytes[1] = 0x00;
-            tx_params[tx_param_idx].pkt_config.src_mac.addr_bytes[2] = 0x00;
-            tx_params[tx_param_idx].pkt_config.src_mac.addr_bytes[3] = 0x00;
-            tx_params[tx_param_idx].pkt_config.src_mac.addr_bytes[4] = 0x00;
-            tx_params[tx_param_idx].pkt_config.src_mac.addr_bytes[5] = src_mac_tail;
+        // Both packets carry the same SRC MAC (Net A's 0x20 tail). The
+        // network is identified on RX purely by the 802.1Q VLAN tag —
+        // CMC_NET_B_SRC_MAC_TAIL (0x40) is intentionally unused now.
+        uint8_t src_mac_tail = CMC_NET_A_SRC_MAC_TAIL;
+        tx_params[tx_param_idx].pkt_config.src_mac.addr_bytes[0] = 0x02;
+        tx_params[tx_param_idx].pkt_config.src_mac.addr_bytes[1] = 0x00;
+        tx_params[tx_param_idx].pkt_config.src_mac.addr_bytes[2] = 0x00;
+        tx_params[tx_param_idx].pkt_config.src_mac.addr_bytes[3] = 0x00;
+        tx_params[tx_param_idx].pkt_config.src_mac.addr_bytes[4] = 0x00;
+        tx_params[tx_param_idx].pkt_config.src_mac.addr_bytes[5] = src_mac_tail;
 
-            tx_params[tx_param_idx].pkt_config.src_ip = (10U << 24);
+        tx_params[tx_param_idx].pkt_config.src_ip = (10U << 24);
 
-            tx_params[tx_param_idx].pkt_config.src_port = DEFAULT_SRC_PORT;
-            tx_params[tx_param_idx].pkt_config.dst_port = DEFAULT_DST_PORT;
-            tx_params[tx_param_idx].pkt_config.ttl = DEFAULT_TTL;
+        tx_params[tx_param_idx].pkt_config.src_port = DEFAULT_SRC_PORT;
+        tx_params[tx_param_idx].pkt_config.dst_port = DEFAULT_DST_PORT;
+        tx_params[tx_param_idx].pkt_config.ttl = DEFAULT_TTL;
 
-            const char *net_label =
-                (tx_vlan == 97) ? "Net A" :
-                (tx_vlan == 98) ? "Net B" : "Net ?";
-            printf("  TX Queue %u -> Lcore %2u -> VLAN %u (%s) | VL RANGE [%u..%u) "
-                   "| Rate=%.4fGbps | SRC MAC tail=0x%02X\n",
-                   q, lcore_id, tx_vlan, net_label,
-                   get_tx_vl_id_range_start(port_id, q),
-                   get_tx_vl_id_range_end(port_id, q),
-                   this_queue_gbps, src_mac_tail);
+        printf("  TX Worker (dual-net) -> Lcore %2u | VLAN %u (Net A, q0) + "
+               "VLAN %u (Net B, q1) | VL RANGE [%u..%u) | "
+               "Rate=%.4fGbps per network | SRC MAC tail=0x%02X\n",
+               lcore_id, tx_vlan_a, tx_vlan_b,
+               get_tx_vl_id_range_start(port_id, 0),
+               get_tx_vl_id_range_end(port_id, 0),
+               this_queue_gbps, src_mac_tail);
 
-            int ret = rte_eal_remote_launch(tx_worker,
-                                            &tx_params[tx_param_idx],
-                                            lcore_id);
-            if (ret != 0)
-            {
-                printf("Error launching TX worker on lcore %u: %d\n", lcore_id, ret);
-                return ret;
-            }
-            else
-            {
-                printf("    ✓ TX Worker launched successfully\n");
-            }
-
-            tx_param_idx++;
+        int ret = rte_eal_remote_launch(tx_worker,
+                                        &tx_params[tx_param_idx],
+                                        lcore_id);
+        if (ret != 0)
+        {
+            printf("Error launching TX worker on lcore %u: %d\n", lcore_id, ret);
+            return ret;
         }
+        else
+        {
+            printf("    ✓ TX Worker launched successfully\n");
+        }
+
+        tx_param_idx++;
     }
 
     // NOTE: DPDK External TX workers are started after DPDK RX/TX workers

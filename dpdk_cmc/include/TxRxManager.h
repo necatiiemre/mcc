@@ -143,7 +143,12 @@ struct port_vl_tracker {
     // No lock needed - using lock-free atomic operations per VL-ID
 };
 
-extern struct port_vl_tracker port_vl_trackers[MAX_PORTS];
+// Trackers are split per (port, CMC port) so that Net A and Net B — which
+// share the same VL-ID range — keep independent expected_seq / pkt_count
+// state. The TX side emits the same (VL-ID, seq) on both networks
+// simultaneously; without this split the second arrival would be misread
+// as a duplicate.
+extern struct port_vl_tracker port_vl_trackers[MAX_PORTS][CMC_PORT_COUNT];
 
 /**
  * TX/RX configuration for a port
@@ -193,6 +198,16 @@ struct tx_worker_params
     uint16_t cross_vl_start;
     uint16_t cross_vl_count;
     double   cross_gbps;
+
+    // Dual-network mode: a single TX worker emits the same (VL-ID, seq, payload)
+    // on two queues — Net A on `queue_id` (with `vlan_id`) and Net B on
+    // `alt_queue_id` (with `alt_vlan_id`). Both packets are byte-identical
+    // except for the 802.1Q VLAN tag, so the receiver can compare what came
+    // back on each network. When `dual_net` is false the worker takes the
+    // legacy single-queue path.
+    bool     dual_net;
+    uint16_t alt_queue_id;
+    uint16_t alt_vlan_id;
 };
 
 /**
