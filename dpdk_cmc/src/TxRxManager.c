@@ -2006,9 +2006,14 @@ int rx_worker(void *arg)
                     //   - ATE mode (all flows), or
                     //   - Unit test pure-PRBS cross flow (no CMC transform).
                     // ==========================================
+                    // Skip the trailing DTN_SEQ byte from the PRBS comparison —
+                    // tx_worker overwrites it with the wraparound sequence
+                    // counter, so it deliberately diverges from the original
+                    // PRBS-31 byte at that offset.
+                    const uint32_t prbs_check_len = NUM_PRBS_BYTES - 1;
                     uint8_t *recv = payload_base + SEQ_BYTES;
                     uint8_t *exp = prbs_exp;
-                    int diff = memcmp(recv, exp, NUM_PRBS_BYTES);
+                    int diff = memcmp(recv, exp, prbs_check_len);
 
                     if (likely(diff == 0)) {
                         local_good++;
@@ -2033,10 +2038,10 @@ int rx_worker(void *arg)
                         uint64_t berr = 0;
                         const uint64_t *r64 = (const uint64_t *)recv;
                         const uint64_t *e64 = (const uint64_t *)exp;
-                        const uint16_t nq = NUM_PRBS_BYTES / 8;
+                        const uint16_t nq = prbs_check_len / 8;
                         for (uint16_t k = 0; k < nq; k++)
                             berr += __builtin_popcountll(r64[k] ^ e64[k]);
-                        uint16_t rem = NUM_PRBS_BYTES & 7;
+                        uint16_t rem = prbs_check_len & 7;
                         if (rem) {
                             const uint8_t *r8 = (const uint8_t *)(r64 + nq);
                             const uint8_t *e8 = (const uint8_t *)(e64 + nq);
