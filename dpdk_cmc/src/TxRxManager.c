@@ -1568,6 +1568,14 @@ int tx_worker(void *arg)
         // keep both networks aligned on the next attempt.
         uint16_t nb_tx = rte_eth_tx_burst(params->port_id, params->queue_id, &pkt, 1);
 
+        // === DIAGNOSTIC: trace first 20 ticks to confirm one-A-one-B ===
+        // Remove or guard with a flag once the duplicate-packet issue is
+        // resolved.
+        static __thread uint16_t dbg_tick_count = 0;
+        uint16_t nb_tx_b_dbg = 0;
+        // (nb_tx_b_dbg gets filled in below if we attempt the twin send)
+#define DBG_DUMP_LIMIT 20
+
         if (unlikely(!first_pkt_sent && nb_tx > 0))
         {
             printf("TX Worker: First packet sent on Port %u Queue %u\n",
@@ -1581,6 +1589,7 @@ int tx_worker(void *arg)
             if (params->dual_net) {
                 nb_tx_b = rte_eth_tx_burst(params->port_id,
                                            params->alt_queue_id, &pkt_b, 1);
+                nb_tx_b_dbg = nb_tx_b;
                 if (unlikely(nb_tx_b == 0)) {
                     // Net A is already on the wire; commit so its seq advances
                     // monotonically. Net B will see a one-packet gap which the
@@ -1591,6 +1600,15 @@ int tx_worker(void *arg)
             }
             // Increment sequence only after packet is successfully sent
             commit_tx_sequence(params->port_id, curr_vl);
+
+            if (dbg_tick_count < DBG_DUMP_LIMIT) {
+                printf("[TX-DBG tick=%u] VL=%u seq=%lu  q%u(A)=%u  q%u(B)=%u\n",
+                       (unsigned)dbg_tick_count,
+                       (unsigned)curr_vl, (unsigned long)seq,
+                       (unsigned)params->queue_id, (unsigned)nb_tx,
+                       (unsigned)params->alt_queue_id, (unsigned)nb_tx_b_dbg);
+                dbg_tick_count++;
+            }
         }
         else
         {
