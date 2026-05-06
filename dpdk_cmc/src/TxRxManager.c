@@ -1507,15 +1507,24 @@ int tx_worker(void *arg)
         fill_payload_with_prbs31(pkt, params->port_id, seq, l2_len);
 #endif
 
-        // Stamp DTN_SEQ — the trailing byte of the payload — with the low
-        // 8 bits of the TX sequence. fill_payload leaves a PRBS byte there;
-        // the verifier on the return path uses DTN_SEQ as a small wrap-around
-        // sequence counter, so we make sure prbs_seq=N → DTN_SEQ=N&0xFF for
-        // both Net A and the Net B twin built below.
+        // Stamp DTN_SEQ — the trailing byte of the payload — with a 1..255
+        // cyclic counter derived from the TX sequence. The verifier on the
+        // return path expects:
+        //   seq=0   → DTN_SEQ=0   (0 only ever appears as the first value)
+        //   seq=1   → DTN_SEQ=1
+        //   …
+        //   seq=255 → DTN_SEQ=255
+        //   seq=256 → DTN_SEQ=1   (wraps to 1, not 0)
+        //   seq=257 → DTN_SEQ=2
+        //   …
+        // i.e. dtn = (seq - 1) mod 255 + 1, with seq=0 special-cased to 0.
+        const uint8_t dtn_seq = (seq == 0)
+                                    ? 0u
+                                    : (uint8_t)(((seq - 1u) % 255u) + 1u);
         {
             uint8_t *pkt_data_a = rte_pktmbuf_mtod(pkt, uint8_t *);
             uint16_t pkt_len_a  = rte_pktmbuf_data_len(pkt);
-            pkt_data_a[pkt_len_a - 1] = (uint8_t)(seq & 0xFF);
+            pkt_data_a[pkt_len_a - 1] = dtn_seq;
         }
 
         // ==========================================
@@ -1552,7 +1561,7 @@ int tx_worker(void *arg)
             // outside the VLAN tag and SRC MAC tail.
             uint8_t *pkt_data_b = rte_pktmbuf_mtod(pkt_b, uint8_t *);
             uint16_t pkt_len_b  = rte_pktmbuf_data_len(pkt_b);
-            pkt_data_b[pkt_len_b - 1] = (uint8_t)(seq & 0xFF);
+            pkt_data_b[pkt_len_b - 1] = dtn_seq;
         }
 
         // Send Net A first; if its queue is full we drop the twin too and
