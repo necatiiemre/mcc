@@ -1507,6 +1507,17 @@ int tx_worker(void *arg)
         fill_payload_with_prbs31(pkt, params->port_id, seq, l2_len);
 #endif
 
+        // Stamp DTN_SEQ — the trailing byte of the payload — with the low
+        // 8 bits of the TX sequence. fill_payload leaves a PRBS byte there;
+        // the verifier on the return path uses DTN_SEQ as a small wrap-around
+        // sequence counter, so we make sure prbs_seq=N → DTN_SEQ=N&0xFF for
+        // both Net A and the Net B twin built below.
+        {
+            uint8_t *pkt_data_a = rte_pktmbuf_mtod(pkt, uint8_t *);
+            uint16_t pkt_len_a  = rte_pktmbuf_data_len(pkt);
+            pkt_data_a[pkt_len_a - 1] = (uint8_t)(seq & 0xFF);
+        }
+
         // ==========================================
         // DUAL-NET MODE: build the Net B twin
         // ==========================================
@@ -1537,6 +1548,11 @@ int tx_worker(void *arg)
             build_packet_mbuf(pkt_b, &cfg_b);
             fill_payload_with_prbs31(pkt_b, params->port_id, seq, l2_len);
 #endif
+            // Same DTN_SEQ stamp as Net A — twin must be byte-identical
+            // outside the VLAN tag and SRC MAC tail.
+            uint8_t *pkt_data_b = rte_pktmbuf_mtod(pkt_b, uint8_t *);
+            uint16_t pkt_len_b  = rte_pktmbuf_data_len(pkt_b);
+            pkt_data_b[pkt_len_b - 1] = (uint8_t)(seq & 0xFF);
         }
 
         // Send Net A first; if its queue is full we drop the twin too and
