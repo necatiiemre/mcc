@@ -44,7 +44,7 @@
 // ==========================================
 // IMIX (Internet Mix) CONFIGURATION (compiled out by default)
 // ==========================================
-// Custom IMIX profile preserved verbatim from the VMC heritage. Default off
+// Custom IMIX profile preserved verbatim from the CMC heritage. Default off
 // in CMC; flip IMIX_ENABLED to 1 if needed for future tests.
 #define IMIX_ENABLED 0
 
@@ -77,7 +77,7 @@
 //
 // VL-ID is encoded in the last 2 bytes of DST MAC (03:00:00:00:VV:VV) and
 // in the last 2 bytes of DST IP (224.224.VV.VV). The "network type" is set
-// in the last byte of the SRC MAC (0x20 = Net A, 0x40 = Net B); the VMC is
+// in the last byte of the SRC MAC (0x20 = Net A, 0x40 = Net B); the CMC is
 // expected to return packets on a network-specific RX VLAN, which is what
 // the server uses to classify Net A vs Net B in stats.
 //
@@ -207,57 +207,57 @@ struct port_vlan_config
 #define STATS_INTERVAL_SEC 1 // Write statistics every N seconds
 
 // ==========================================
-// VMC PORT-BASED STATISTICS MODE
+// CMC PORT-BASED STATISTICS MODE
 // ==========================================
-// STATS_MODE_VMC=1: per-flow statistics table (Network A + Network B)
+// STATS_MODE_CMC=1: per-flow statistics table (Network A + Network B)
 //   - RX queue steering: rte_flow VLAN match (each queue = 1 VLAN = 1 flow)
 //   - HW per-queue stats drive the Gbps calculation
 //   - SplitMix64 + CRC32C + PRBS validation per network
 //
-// STATS_MODE_VMC=0: legacy per-server-port table (single port).
+// STATS_MODE_CMC=0: legacy per-server-port table (single port).
 
-#ifndef STATS_MODE_VMC
-#define STATS_MODE_VMC 1
+#ifndef STATS_MODE_CMC
+#define STATS_MODE_CMC 1
 #endif
 
 // CMC has exactly two flows: Network A (VLAN 97 → 225) and Network B (VLAN
-// 98 → 226). Each occupies one VMC entry / one TX queue / one RX queue.
-#define VMC_PORT_COUNT 2
-#define VMC_DPDK_PORT_COUNT 2
+// 98 → 226). Each occupies one CMC entry / one TX queue / one RX queue.
+#define CMC_PORT_COUNT 2
+#define CMC_DPDK_PORT_COUNT 2
 
-// 1 VLAN per VMC port (1:1 with RX queue)
-#define VMC_VLANS_PER_PORT 1
+// 1 VLAN per CMC port (1:1 with RX queue)
+#define CMC_VLANS_PER_PORT 1
 
-// Payload verification mode for a VMC flow (used on server RX). CMC normal
+// Payload verification mode for a CMC flow (used on server RX). CMC normal
 // mode is SplitMix64+CRC32C+PRBS; ATE mode falls back to plain PRBS.
-#define VMC_PAYLOAD_SPLITMIX_CRC 0  // VMC applies SplitMix64 XOR + CRC32C
-#define VMC_PAYLOAD_PURE_PRBS    1  // ATE / loopback: plain PRBS
+#define CMC_PAYLOAD_SPLITMIX_CRC 0  // CMC applies SplitMix64 XOR + CRC32C
+#define CMC_PAYLOAD_PURE_PRBS    1  // ATE / loopback: plain PRBS
 
 // ==========================================
-// VMC PORT MAPPING TABLE
+// CMC PORT MAPPING TABLE
 // ==========================================
 // One entry per directional flow. The CMC layout is two flows on a single
 // server port (DPDK port_id 0, EAL-allowlisted server port 2):
 //
-//   VMC 0  Net A  TX VLAN  97 / VL 10001..10104
-//                 RX VLAN 225 / VL 10521..10624  (SplitMix+CRC remap by VMC,
+//   CMC 0  Net A  TX VLAN  97 / VL 10001..10104
+//                 RX VLAN 225 / VL 10521..10624  (SplitMix+CRC remap by CMC,
 //                                                 VL-ID +520 shift)
-//   VMC 1  Net B  TX VLAN  98 / VL 10001..10104
+//   CMC 1  Net B  TX VLAN  98 / VL 10001..10104
 //                 RX VLAN 226 / VL 10521..10624  (same mode/shift)
 //
 // vl_id_start describes the range observed on the server RX side (what the
-// VMC writes into the returning packet). tx_vl_id_start is what the server
+// CMC writes into the returning packet). tx_vl_id_start is what the server
 // sends.
 
-struct vmc_port_map_entry {
-    uint16_t vmc_port_id;       // Logical VMC port index (0..VMC_PORT_COUNT-1)
+struct cmc_port_map_entry {
+    uint16_t cmc_port_id;       // Logical CMC port index (0..CMC_PORT_COUNT-1)
 
-    // VMC RX (Server → VMC): server sends from this VLAN
+    // CMC RX (Server → CMC): server sends from this VLAN
     uint16_t rx_vlan;
     uint16_t rx_server_port;
     uint16_t rx_server_queue;
 
-    // VMC TX (VMC → Server): VMC sends from this VLAN
+    // CMC TX (CMC → Server): CMC sends from this VLAN
     uint16_t tx_vlan;
     uint16_t tx_server_port;
     uint16_t tx_server_queue;
@@ -267,32 +267,32 @@ struct vmc_port_map_entry {
     uint16_t tx_vl_id_start;
     uint16_t vl_id_count;
 
-    // Payload verification mode (see VMC_PAYLOAD_* above)
+    // Payload verification mode (see CMC_PAYLOAD_* above)
     uint8_t  payload_mode;
 };
 
-#define VMC_PORT_MAP_INIT {                                                                       \
-    /* VMC 0: Network A — VLAN 97 ↔ 225, VL 10001..10104 ↔ 10521..10624 */                        \
-    {.vmc_port_id = 0,  .rx_vlan = 97,  .rx_server_port = 0, .rx_server_queue = 0,                \
+#define CMC_PORT_MAP_INIT {                                                                       \
+    /* CMC 0: Network A — VLAN 97 ↔ 225, VL 10001..10104 ↔ 10521..10624 */                        \
+    {.cmc_port_id = 0,  .rx_vlan = 97,  .rx_server_port = 0, .rx_server_queue = 0,                \
                          .tx_vlan = 225, .tx_server_port = 0, .tx_server_queue = 0,               \
                          .vl_id_start = 10521, .tx_vl_id_start = 10001, .vl_id_count = 104,       \
-                         .payload_mode = VMC_PAYLOAD_SPLITMIX_CRC},                               \
-    /* VMC 1: Network B — VLAN 98 ↔ 226, VL 10001..10104 ↔ 10521..10624 */                        \
-    {.vmc_port_id = 1,  .rx_vlan = 98,  .rx_server_port = 0, .rx_server_queue = 1,                \
+                         .payload_mode = CMC_PAYLOAD_SPLITMIX_CRC},                               \
+    /* CMC 1: Network B — VLAN 98 ↔ 226, VL 10001..10104 ↔ 10521..10624 */                        \
+    {.cmc_port_id = 1,  .rx_vlan = 98,  .rx_server_port = 0, .rx_server_queue = 1,                \
                          .tx_vlan = 226, .tx_server_port = 0, .tx_server_queue = 1,               \
                          .vl_id_start = 10521, .tx_vl_id_start = 10001, .vl_id_count = 104,       \
-                         .payload_mode = VMC_PAYLOAD_SPLITMIX_CRC},                               \
+                         .payload_mode = CMC_PAYLOAD_SPLITMIX_CRC},                               \
 }
 
-// VLAN → VMC port lookup (fast access). VLANs 0..256 are 8-bit indexable.
-#define VMC_VLAN_LOOKUP_SIZE 257
-#define VMC_VLAN_INVALID 0xFF
+// VLAN → CMC port lookup (fast access). VLANs 0..256 are 8-bit indexable.
+#define CMC_VLAN_LOOKUP_SIZE 257
+#define CMC_VLAN_INVALID 0xFF
 
-// (Kept for diagnostic-only paths; per-packet dispatch uses queue_to_vmc_port)
-#define VMC_VL_ID_INVALID 0xFFFF
+// (Kept for diagnostic-only paths; per-packet dispatch uses queue_to_cmc_port)
+#define CMC_VL_ID_INVALID 0xFFFF
 
 // ==========================================
-// VMC PORT DISPLAY GROUPING (NETWORK A / NETWORK B)
+// CMC PORT DISPLAY GROUPING (NETWORK A / NETWORK B)
 // ==========================================
 // Two display tables, one per network. The grouping arrays live here so the
 // stats layer (Helpers.c) can iterate without re-deriving them.
@@ -300,13 +300,13 @@ struct vmc_port_map_entry {
 #define NETA_COUNT 1
 #define NETB_COUNT 1
 
-static const uint16_t neta_vmc_indices[NETA_COUNT] = {0};
-static const uint16_t netb_vmc_indices[NETB_COUNT] = {1};
+static const uint16_t neta_cmc_indices[NETA_COUNT] = {0};
+static const uint16_t netb_cmc_indices[NETB_COUNT] = {1};
 
-// Display label per VMC port (indexed by VMC port number)
-static const char * const vmc_port_labels[VMC_PORT_COUNT] = {
-    "NET-A",   /* VMC 0: Network A (VLAN 97 → 225) */
-    "NET-B",   /* VMC 1: Network B (VLAN 98 → 226) */
+// Display label per CMC port (indexed by CMC port number)
+static const char * const cmc_port_labels[CMC_PORT_COUNT] = {
+    "NET-A",   /* CMC 0: Network A (VLAN 97 → 225) */
+    "NET-B",   /* CMC 1: Network B (VLAN 98 → 226) */
 };
 
 #endif /* CONFIG_H */

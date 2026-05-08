@@ -99,7 +99,7 @@ int main(int argc, char const *argv[])
             printf("Continuing in foreground mode...\n");
         } else if (pid > 0) {
             // Parent process - exit so SSH connection closes
-            printf("DPDK VMC continuing in background (PID: %d)\n", pid);
+            printf("DPDK CMC continuing in background (PID: %d)\n", pid);
             printf("Log file: /tmp/dpdk_app.log\n");
             printf("To monitor: ssh user@server 'tail -f /tmp/dpdk_app.log'\n");
             printf("To stop: ssh user@server 'sudo pkill -f dpdk_app'\n");
@@ -122,7 +122,7 @@ int main(int argc, char const *argv[])
             close(STDIN_FILENO);
             open("/dev/null", O_RDONLY);
 
-            printf("\n=== DPDK VMC Background Mode Started (PID: %d) ===\n", getpid());
+            printf("\n=== DPDK CMC Background Mode Started (PID: %d) ===\n", getpid());
             printf("Initializing DPDK EAL...\n\n");
             fflush(stdout);
         }
@@ -169,10 +169,10 @@ int main(int argc, char const *argv[])
     // Initialize RX verification stats (PRBS good/bad/bit_errors + sequence stats)
     init_rx_stats();
 
-#if STATS_MODE_VMC
-    // Initialize VMC port mapping and statistics
-    init_vmc_port_map();
-    init_vmc_stats();
+#if STATS_MODE_CMC
+    // Initialize CMC port mapping and statistics
+    init_cmc_port_map();
+    init_cmc_stats();
 #endif
 
     // *** PRBS-31 CACHE INITIALIZATION ***
@@ -362,7 +362,7 @@ int main(int argc, char const *argv[])
         // the matching rx_worker dispatch (also commented out).
         // hm_print_dashboard();
 
-        // PSU telemetry table (MainSoftware -> dpdk_vmc UDP stream).
+        // PSU telemetry table (MainSoftware -> dpdk_cmc UDP stream).
         // Printed from main loop so visibility does not depend on
         // health-monitor internal formatting details.
         psu_telem_print_table();

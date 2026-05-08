@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include <vmc_message_types.h>
+#include <cmc_message_types.h>
 
 // NOT: Health Monitor trafiği ayrı bir interface değil, normal DPDK data-plane
 // port'ları üzerinden taşınır. Tüm HM paketleri (CPU usage, CBIT, PBIT) DUT
@@ -68,7 +68,7 @@ void hm_print_dashboard(void);
 // ============================================================================
 // Print fonksiyonları (printer thread ya da debug amaçlı dışarıdan çağrılır)
 // ============================================================================
-void print_vmc_pbit_report     (const vmc_pbit_data_t *data,           const char *device_name);
+void print_cmc_pbit_report     (const cmc_pbit_data_t *data,           const char *device_name);
 void print_bm_cbit_report      (const bm_engineering_cbit_report_t *data, const char *report_title, const char *device_name);
 void print_bm_flag_cbit_report (const bm_flag_cbit_report_t *data,     const char *device_name);
 void print_dtn_es_cbit_report  (const dtn_es_cbit_report_t *data,      const char *device_name);

@@ -7,7 +7,7 @@
  * @brief Interactive ATE mode selection
  *
  * Asks the user if they want ATE test mode.
- * No Cumulus reconfiguration is done (VMC initial config is sufficient).
+ * No Cumulus reconfiguration is done (CMC initial config is sufficient).
  */
 void ate_mode_selection(void);
 

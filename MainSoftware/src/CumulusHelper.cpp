@@ -1994,12 +1994,17 @@ std::vector<BridgeVlanEntry> CumulusHelper::expectedVlansVmc()
 
 std::vector<BridgeVlanEntry> CumulusHelper::expectedVlansCmc()
 {
-    // Initial CMC bridge-vlan map mirrors VMC; edit the groups list below
-    // when the CMC port range / VLAN ids diverge.
-    static const std::vector<std::pair<std::string, int>> groups = {
-        {"swp9",   97}, {"swp10", 101}, {"swp11", 105}, {"swp12", 109},
+    // CMC simplified bridge: only Net A (swp9s0 / VLAN 97) and Net B
+    // (swp9s1 / VLAN 98) endpoints. The bridge vlan add ... untagged
+    // commands flip these two VLANs to untagged-egress on the loopback
+    // ports, which is what makes the PVID-225 / PVID-226 swap work — the
+    // loopback strips VLAN 97 on its way out, the cable returns it
+    // untagged, and the PVID re-tags it with 225 (Net A) or 226 (Net B)
+    // before the bridge forwards it back to swp13.
+    return {
+        BridgeVlanEntry{"swp9s0", 97, /*egress_untagged=*/true, /*pvid=*/false},
+        BridgeVlanEntry{"swp9s1", 98, /*egress_untagged=*/true, /*pvid=*/false},
     };
-    return expandGroups(groups);
 }
 
 bool CumulusHelper::isRemoteInterfacesFileUpToDate(const std::string& local_interfaces_path)

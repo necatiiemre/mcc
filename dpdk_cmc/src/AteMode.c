@@ -33,7 +33,7 @@ void ate_mode_selection(void) {
         if (ask_question("Do you want to continue in ATE test mode?")) {
             printf("\n[ATE] ATE test mode selected.\n");
 
-            // No Cumulus ATE reconfiguration needed for VMC -
+            // No Cumulus ATE reconfiguration needed for CMC -
             // the initial Cumulus config from configureSequence is sufficient.
 
             // Ask for ATE test cables - max 3 attempts before returning to ATE selection
