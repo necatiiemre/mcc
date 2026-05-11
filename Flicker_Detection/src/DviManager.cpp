@@ -153,6 +153,7 @@ uint8_t DviManager::consumer_worker(int channelId, int core)
 
     float prevScore = 0.0f;
     bool firstFrame = true;
+    bool fpsBelow10Active = false;
 
     getDeviceTemperature(channelId, channel);
     const auto start_time = std::chrono::steady_clock::now();
@@ -216,6 +217,25 @@ uint8_t DviManager::consumer_worker(int channelId, int core)
 
         int currentFps = channel.fps.load();
         cv::Scalar fpsColor = (currentFps < 10) ? cv::Scalar(0, 0, 255) : cv::Scalar(0, 255, 0);
+
+        auto secsSinceStart = std::chrono::duration_cast<std::chrono::seconds>(now - start_time).count();
+        if (secsSinceStart >= 10)
+        {
+            if (currentFps < 10 && !fpsBelow10Active)
+            {
+                fprintf(stderr, "[FD][DVI ch%d] FPS dropped below 10 at %s (fps=%d)\n",
+                        channelId + 1, timeStr.c_str(), currentFps);
+                fflush(stderr);
+                fpsBelow10Active = true;
+            }
+            else if (currentFps >= 10 && fpsBelow10Active)
+            {
+                fprintf(stderr, "[FD][DVI ch%d] FPS recovered at %s (fps=%d)\n",
+                        channelId + 1, timeStr.c_str(), currentFps);
+                fflush(stderr);
+                fpsBelow10Active = false;
+            }
+        }
         cv::putText(currentFrame, "Time: " + timeStr, cv::Point(10, 290),
                     cv::FONT_HERSHEY_SIMPLEX, 0.56, cv::Scalar(0, 255, 0), 2);
         cv::putText(currentFrame, "FPS: " + std::to_string(currentFps), cv::Point(10, 320),

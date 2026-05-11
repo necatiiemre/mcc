@@ -259,6 +259,11 @@ public:
     bool stopRequested_card2_ch1 = false;
     bool stopRequested_card2_ch2 = false;
 
+    bool fpsBelow10_card1_ch1 = false;
+    bool fpsBelow10_card1_ch2 = false;
+    bool fpsBelow10_card2_ch1 = false;
+    bool fpsBelow10_card2_ch2 = false;
+
 private:
     struct ImageBuffers
     {

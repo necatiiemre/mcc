@@ -1162,6 +1162,25 @@ void DriverManager::handleCard1Channel1(UINT32 *data)
             auto nowfpstime = std::chrono::steady_clock::now();
             std::chrono::duration<float> elapsed_fps_time = std::chrono::duration_cast<std::chrono::seconds>(nowfpstime - driver_manager.card1_ch1_time);
             driver_manager.fps_card1_ch1 = driver_manager.counter_card1_ch1 / (elapsed_fps_time.count() + 1e-9);
+
+            if (totalSeconds >= 10)
+            {
+                int curFps = int(driver_manager.fps_card1_ch1);
+                if (curFps < 10 && !driver_manager.fpsBelow10_card1_ch1)
+                {
+                    fprintf(stderr, "[FD][Velocity card1 ch1] FPS dropped below 10 at %s (fps=%d)\n",
+                            timeStr.c_str(), curFps);
+                    fflush(stderr);
+                    driver_manager.fpsBelow10_card1_ch1 = true;
+                }
+                else if (curFps >= 10 && driver_manager.fpsBelow10_card1_ch1)
+                {
+                    fprintf(stderr, "[FD][Velocity card1 ch1] FPS recovered at %s (fps=%d)\n",
+                            timeStr.c_str(), curFps);
+                    fflush(stderr);
+                    driver_manager.fpsBelow10_card1_ch1 = false;
+                }
+            }
         }
 
         if (loopbackTestMode)
@@ -1299,6 +1318,25 @@ void DriverManager::handleCard1Channel2(UINT32 *data)
             auto nowfpstime = std::chrono::steady_clock::now();
             std::chrono::duration<float> elapsed_fps_time = std::chrono::duration_cast<std::chrono::seconds>(nowfpstime - driver_manager.card1_ch2_time);
             driver_manager.fps_card1_ch2 = driver_manager.counter_card1_ch2 / (elapsed_fps_time.count() + 1e-9);
+
+            if (totalSeconds >= 10)
+            {
+                int curFps = int(driver_manager.fps_card1_ch2);
+                if (curFps < 10 && !driver_manager.fpsBelow10_card1_ch2)
+                {
+                    fprintf(stderr, "[FD][Velocity card1 ch2] FPS dropped below 10 at %s (fps=%d)\n",
+                            timeStr.c_str(), curFps);
+                    fflush(stderr);
+                    driver_manager.fpsBelow10_card1_ch2 = true;
+                }
+                else if (curFps >= 10 && driver_manager.fpsBelow10_card1_ch2)
+                {
+                    fprintf(stderr, "[FD][Velocity card1 ch2] FPS recovered at %s (fps=%d)\n",
+                            timeStr.c_str(), curFps);
+                    fflush(stderr);
+                    driver_manager.fpsBelow10_card1_ch2 = false;
+                }
+            }
         }
 
         if (loopbackTestMode)
@@ -1446,6 +1484,25 @@ void DriverManager::handleCard2Channel1(UINT32 *data)
             auto nowfpstime = std::chrono::steady_clock::now();
             std::chrono::duration<float> elapsed_fps_time = std::chrono::duration_cast<std::chrono::seconds>(nowfpstime - driver_manager.card2_ch1_time);
             driver_manager.fps_card2_ch1 = driver_manager.counter_card2_ch1 / (elapsed_fps_time.count() + 1e-9);
+
+            if (totalSeconds >= 10)
+            {
+                int curFps = int(driver_manager.fps_card2_ch1);
+                if (curFps < 10 && !driver_manager.fpsBelow10_card2_ch1)
+                {
+                    fprintf(stderr, "[FD][Velocity card2 ch1] FPS dropped below 10 at %s (fps=%d)\n",
+                            timeStr.c_str(), curFps);
+                    fflush(stderr);
+                    driver_manager.fpsBelow10_card2_ch1 = true;
+                }
+                else if (curFps >= 10 && driver_manager.fpsBelow10_card2_ch1)
+                {
+                    fprintf(stderr, "[FD][Velocity card2 ch1] FPS recovered at %s (fps=%d)\n",
+                            timeStr.c_str(), curFps);
+                    fflush(stderr);
+                    driver_manager.fpsBelow10_card2_ch1 = false;
+                }
+            }
         }
 
         if (loopbackTestMode)
@@ -1587,6 +1644,25 @@ void DriverManager::handleCard2Channel2(UINT32 *data)
             auto nowfpstime = std::chrono::steady_clock::now();
             std::chrono::duration<float> elapsed_fps_time = nowfpstime - driver_manager.card2_ch2_time;
             driver_manager.fps_card2_ch2 = driver_manager.counter_card2_ch2 / (elapsed_fps_time.count() + 1e-9f);
+
+            if (totalSeconds >= 10)
+            {
+                int curFps = int(driver_manager.fps_card2_ch2);
+                if (curFps < 10 && !driver_manager.fpsBelow10_card2_ch2)
+                {
+                    fprintf(stderr, "[FD][Velocity card2 ch2] FPS dropped below 10 at %s (fps=%d)\n",
+                            timeStr.c_str(), curFps);
+                    fflush(stderr);
+                    driver_manager.fpsBelow10_card2_ch2 = true;
+                }
+                else if (curFps >= 10 && driver_manager.fpsBelow10_card2_ch2)
+                {
+                    fprintf(stderr, "[FD][Velocity card2 ch2] FPS recovered at %s (fps=%d)\n",
+                            timeStr.c_str(), curFps);
+                    fflush(stderr);
+                    driver_manager.fpsBelow10_card2_ch2 = false;
+                }
+            }
         }
 
         if (loopbackTestMode)
