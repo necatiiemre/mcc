@@ -31,17 +31,32 @@ static void shutdown_signal_handler(int /*sig*/)
 
 static void scheduleStatisticsResetIn60s()
 {
+    fprintf(stderr, "[FD] statistics reset scheduled for T+60s\n");
+    fflush(stderr);
     std::thread([]() {
         for (int i = 0; i < 600; ++i)
         {
-            if (g_shutdown_signal) return;
+            if (g_shutdown_signal)
+            {
+                fprintf(stderr, "[FD] reset timer aborted by shutdown at iter %d\n", i);
+                fflush(stderr);
+                return;
+            }
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
-        if (g_shutdown_signal) return;
-        std::cout << "[FD] 60s elapsed: resetting statistics" << std::endl;
+        if (g_shutdown_signal)
+        {
+            fprintf(stderr, "[FD] reset timer aborted by shutdown after wait\n");
+            fflush(stderr);
+            return;
+        }
+        fprintf(stderr, "[FD] 60s elapsed: resetting statistics\n");
+        fflush(stderr);
         try { driver_manager.resetStatistics(CARD_BOTH); } catch (...) {}
         try { dvi_manager.resetStatistics(0); } catch (...) {}
         try { dvi_manager.resetStatistics(1); } catch (...) {}
+        fprintf(stderr, "[FD] statistics reset complete\n");
+        fflush(stderr);
     }).detach();
 }
 
