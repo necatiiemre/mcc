@@ -154,6 +154,7 @@ uint8_t DviManager::consumer_worker(int channelId, int core)
     float prevScore = 0.0f;
     bool firstFrame = true;
     bool fpsBelow10Active = false;
+    bool oneMinuteResetDone = false;
 
     getDeviceTemperature(channelId, channel);
     const auto start_time = std::chrono::steady_clock::now();
@@ -227,6 +228,17 @@ uint8_t DviManager::consumer_worker(int channelId, int core)
         cv::Scalar fpsColor = (currentFps < 10) ? cv::Scalar(0, 0, 255) : cv::Scalar(0, 255, 0);
 
         auto secsSinceStart = std::chrono::duration_cast<std::chrono::seconds>(now - start_time).count();
+
+        if (!oneMinuteResetDone && secsSinceStart >= 60)
+        {
+            fprintf(stderr, "[FD][DVI ch%d] elapsed 1 min, resetting frame/error counters at %s\n",
+                    channelId + 1, elapsedBuf);
+            fflush(stderr);
+            channel.frame_counter.store(0);
+            channel.error_frame_counter.store(0);
+            oneMinuteResetDone = true;
+        }
+
         if (secsSinceStart >= 10)
         {
             if (currentFps < 10 && !fpsBelow10Active)

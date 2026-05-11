@@ -1156,6 +1156,18 @@ void DriverManager::handleCard1Channel1(UINT32 *data)
         string_stream_card1_channel_1.str("");
         string_stream_card1_channel_1.clear();
 
+        if (!driver_manager.oneMinuteResetDone_card1_ch1 && totalSeconds >= 60)
+        {
+            fprintf(stderr, "[FD][Velocity card1 ch1] elapsed 1 min, resetting frame/error counters at %s\n",
+                    timeStr.c_str());
+            fflush(stderr);
+            if (driver_manager.frameCount_card1_Ch1)        *driver_manager.frameCount_card1_Ch1 = 0;
+            if (driver_manager.errorFrameCount_card1_Ch1)   *driver_manager.errorFrameCount_card1_Ch1 = 0;
+            if (driver_manager.card1Props.frameCount_Ch1)        *driver_manager.card1Props.frameCount_Ch1 = 0;
+            if (driver_manager.card1Props.errorFrameCount_Ch1)   *driver_manager.card1Props.errorFrameCount_Ch1 = 0;
+            driver_manager.oneMinuteResetDone_card1_ch1 = true;
+        }
+
         if (totalSeconds % 2 == 0)
         {
             rc = GRTV_GetFPGAJunctionTemp(driver_manager.First_Driver, &jtemp_card1_channel1);
@@ -1311,6 +1323,18 @@ void DriverManager::handleCard1Channel2(UINT32 *data)
         std::string timeStr = string_stream_card1_channel_2.str();
         string_stream_card1_channel_2.str("");
         string_stream_card1_channel_2.clear();
+
+        if (!driver_manager.oneMinuteResetDone_card1_ch2 && totalSeconds >= 60)
+        {
+            fprintf(stderr, "[FD][Velocity card1 ch2] elapsed 1 min, resetting frame/error counters at %s\n",
+                    timeStr.c_str());
+            fflush(stderr);
+            if (driver_manager.frameCount_card1_Ch2)        *driver_manager.frameCount_card1_Ch2 = 0;
+            if (driver_manager.errorFrameCount_card1_Ch2)   *driver_manager.errorFrameCount_card1_Ch2 = 0;
+            if (driver_manager.card1Props.frameCount_Ch2)        *driver_manager.card1Props.frameCount_Ch2 = 0;
+            if (driver_manager.card1Props.errorFrameCount_Ch2)   *driver_manager.card1Props.errorFrameCount_Ch2 = 0;
+            driver_manager.oneMinuteResetDone_card1_ch2 = true;
+        }
 
         if (totalSeconds % 2 == 0)
         {
@@ -1478,6 +1502,18 @@ void DriverManager::handleCard2Channel1(UINT32 *data)
         string_stream_card2_channel_1.str("");
         string_stream_card2_channel_1.clear();
 
+        if (!driver_manager.oneMinuteResetDone_card2_ch1 && totalSeconds >= 60)
+        {
+            fprintf(stderr, "[FD][Velocity card2 ch1] elapsed 1 min, resetting frame/error counters at %s\n",
+                    timeStr.c_str());
+            fflush(stderr);
+            if (driver_manager.frameCount_card2_Ch1)        *driver_manager.frameCount_card2_Ch1 = 0;
+            if (driver_manager.errorFrameCount_card2_Ch1)   *driver_manager.errorFrameCount_card2_Ch1 = 0;
+            if (driver_manager.card2Props.frameCount_Ch1)        *driver_manager.card2Props.frameCount_Ch1 = 0;
+            if (driver_manager.card2Props.errorFrameCount_Ch1)   *driver_manager.card2Props.errorFrameCount_Ch1 = 0;
+            driver_manager.oneMinuteResetDone_card2_ch1 = true;
+        }
+
         if (totalSeconds % 2 == 0)
         {
             rc = GRTV_GetFPGAJunctionTemp(driver_manager.Second_Driver, &jtemp_card2_channel1);
@@ -1637,6 +1673,18 @@ void DriverManager::handleCard2Channel2(UINT32 *data)
         std::string timeStr = string_stream_card2_channel_2.str();
         string_stream_card2_channel_2.str("");
         string_stream_card2_channel_2.clear();
+
+        if (!driver_manager.oneMinuteResetDone_card2_ch2 && totalSeconds >= 60)
+        {
+            fprintf(stderr, "[FD][Velocity card2 ch2] elapsed 1 min, resetting frame/error counters at %s\n",
+                    timeStr.c_str());
+            fflush(stderr);
+            if (driver_manager.frameCount_card2_Ch2)        *driver_manager.frameCount_card2_Ch2 = 0;
+            if (driver_manager.errorFrameCount_card2_Ch2)   *driver_manager.errorFrameCount_card2_Ch2 = 0;
+            if (driver_manager.card2Props.frameCount_Ch2)        *driver_manager.card2Props.frameCount_Ch2 = 0;
+            if (driver_manager.card2Props.errorFrameCount_Ch2)   *driver_manager.card2Props.errorFrameCount_Ch2 = 0;
+            driver_manager.oneMinuteResetDone_card2_ch2 = true;
+        }
 
         if (totalSeconds % 2 == 0)
         {

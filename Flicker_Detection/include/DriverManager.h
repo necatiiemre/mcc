@@ -264,6 +264,11 @@ public:
     bool fpsBelow10_card2_ch1 = false;
     bool fpsBelow10_card2_ch2 = false;
 
+    bool oneMinuteResetDone_card1_ch1 = false;
+    bool oneMinuteResetDone_card1_ch2 = false;
+    bool oneMinuteResetDone_card2_ch1 = false;
+    bool oneMinuteResetDone_card2_ch2 = false;
+
 private:
     struct ImageBuffers
     {

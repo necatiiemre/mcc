@@ -29,48 +29,6 @@ static void shutdown_signal_handler(int /*sig*/)
     stopRequested = true;
 }
 
-static void scheduleStatisticsResetIn60s()
-{
-    fprintf(stderr, "[FD] statistics reset scheduled for T+60s\n");
-    fflush(stderr);
-    std::thread([]() {
-        for (int i = 0; i < 600; ++i)
-        {
-            if (g_shutdown_signal)
-            {
-                fprintf(stderr, "[FD] reset timer aborted by shutdown at iter %d\n", i);
-                fflush(stderr);
-                return;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        }
-        if (g_shutdown_signal)
-        {
-            fprintf(stderr, "[FD] reset timer aborted by shutdown after wait\n");
-            fflush(stderr);
-            return;
-        }
-        fprintf(stderr, "[FD] 60s elapsed: resetting statistics\n");
-        fflush(stderr);
-        fprintf(stderr, "[FD] before reset: dvi_ch1.frames=%d errors=%d  dvi_ch2.frames=%d errors=%d\n",
-                dvi_manager.channel_1.frame_counter.load(),
-                dvi_manager.channel_1.error_frame_counter.load(),
-                dvi_manager.channel_2.frame_counter.load(),
-                dvi_manager.channel_2.error_frame_counter.load());
-        fflush(stderr);
-        try { driver_manager.resetFrameCounters(CARD_BOTH); } catch (...) {}
-        try { dvi_manager.resetStatistics(0); } catch (...) {}
-        try { dvi_manager.resetStatistics(1); } catch (...) {}
-        fprintf(stderr, "[FD] after reset:  dvi_ch1.frames=%d errors=%d  dvi_ch2.frames=%d errors=%d\n",
-                dvi_manager.channel_1.frame_counter.load(),
-                dvi_manager.channel_1.error_frame_counter.load(),
-                dvi_manager.channel_2.frame_counter.load(),
-                dvi_manager.channel_2.error_frame_counter.load());
-        fprintf(stderr, "[FD] statistics reset complete\n");
-        fflush(stderr);
-    }).detach();
-}
-
 static void stopAllSystemsOnce()
 {
     bool expected = false;
@@ -348,8 +306,6 @@ int main(int argc, char** argv)
             command_thread = std::thread(processCommands);
         }
 
-        scheduleStatisticsResetIn60s();
-
         fprintf(stderr, "[shutdown] joining velocity_thread...\n");
         if (velocity_thread.joinable()) velocity_thread.join();
         fprintf(stderr, "[shutdown] velocity_thread joined; joining dvi_thread...\n");
@@ -471,8 +427,6 @@ int main(int argc, char** argv)
         std::cerr << "❌ Invalid mode selection.\n";
         return 1;
     }
-
-    scheduleStatisticsResetIn60s();
 
     // Start commands in separate thread
     std::thread command_thread(processCommands);
