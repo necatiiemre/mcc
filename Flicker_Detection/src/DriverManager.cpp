@@ -635,7 +635,7 @@ uint8_t DriverManager::checkCardResolution(UINT_PTR &driver, const std::string &
             int link_rate = config_mode_info.LinkRate[mode_index];
 
             // Resolution check
-            check_resolutionVelocity(width, height, link_rate, width_1280, height_1024, link_rate_6, cardName);
+            check_resolutionVelocity(width, height, link_rate, width_2560, height_1024, link_rate_6, cardName);
 
             LOG_INFO("Card " << cardName
                              << ", Mode " << mode_index

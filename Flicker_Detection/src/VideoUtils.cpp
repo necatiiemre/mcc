@@ -1,7 +1,7 @@
 
 
-const int WIDTH = 1920;
-const int HEIGHT = 1080;
+const int WIDTH = 1280;
+const int HEIGHT = 1024;
 
 #include "VideoUtils.h"
 #include "Helpers.h"
