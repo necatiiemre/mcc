@@ -261,6 +261,19 @@ void DviManager::display_worker(int channelId, int coreId)
 
         if (frame && !frame->empty())
         {
+            bool visible = false;
+            try
+            {
+                visible = cv::getWindowProperty(windowName, cv::WND_PROP_VISIBLE) >= 1.0;
+            }
+            catch (const cv::Exception &)
+            {
+                visible = false;
+            }
+            if (!visible)
+            {
+                cv::namedWindow(windowName, cv::WINDOW_AUTOSIZE);
+            }
             cv::imshow(windowName, *frame);
         }
 
