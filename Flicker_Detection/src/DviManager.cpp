@@ -655,15 +655,11 @@ uint8_t DviManager::resetStatistics(int channel)
         {
             channel_1.frame_counter.store(0);
             channel_1.error_frame_counter.store(0);
-            channel_1.fps.store(0);
-            channel_1.start_time_elapsed = std::chrono::steady_clock::now();
         }
         else if (channel == 1)
         {
             channel_2.frame_counter.store(0);
             channel_2.error_frame_counter.store(0);
-            channel_2.fps.store(0);
-            channel_2.start_time_elapsed = std::chrono::steady_clock::now();
         }
         return CODE_SUCCESS;
     }

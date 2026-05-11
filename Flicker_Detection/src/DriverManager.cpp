@@ -2604,6 +2604,45 @@ uint8_t DriverManager::resetStatistics(Card card)
     }
 }
 
+// Resets only the frame and error counters for the specified card(s) without
+// touching SSIM state (firstFrame/isFirst/scorePrevious) or FPS-related fields.
+// Intended for the periodic statistics reset so it does not perturb FPS or
+// SSIM continuity.
+uint8_t DriverManager::resetFrameCounters(Card card)
+{
+    try
+    {
+        if (card == CARD_1 || card == CARD_BOTH)
+        {
+            if (frameCount_card1_Ch1)        *frameCount_card1_Ch1 = 0;
+            if (frameCount_card1_Ch2)        *frameCount_card1_Ch2 = 0;
+            if (errorFrameCount_card1_Ch1)   *errorFrameCount_card1_Ch1 = 0;
+            if (errorFrameCount_card1_Ch2)   *errorFrameCount_card1_Ch2 = 0;
+            if (card1Props.frameCount_Ch1)        *card1Props.frameCount_Ch1 = 0;
+            if (card1Props.frameCount_Ch2)        *card1Props.frameCount_Ch2 = 0;
+            if (card1Props.errorFrameCount_Ch1)   *card1Props.errorFrameCount_Ch1 = 0;
+            if (card1Props.errorFrameCount_Ch2)   *card1Props.errorFrameCount_Ch2 = 0;
+        }
+        if (card == CARD_2 || card == CARD_BOTH)
+        {
+            if (frameCount_card2_Ch1)        *frameCount_card2_Ch1 = 0;
+            if (frameCount_card2_Ch2)        *frameCount_card2_Ch2 = 0;
+            if (errorFrameCount_card2_Ch1)   *errorFrameCount_card2_Ch1 = 0;
+            if (errorFrameCount_card2_Ch2)   *errorFrameCount_card2_Ch2 = 0;
+            if (card2Props.frameCount_Ch1)        *card2Props.frameCount_Ch1 = 0;
+            if (card2Props.frameCount_Ch2)        *card2Props.frameCount_Ch2 = 0;
+            if (card2Props.errorFrameCount_Ch1)   *card2Props.errorFrameCount_Ch1 = 0;
+            if (card2Props.errorFrameCount_Ch2)   *card2Props.errorFrameCount_Ch2 = 0;
+        }
+        return CODE_SUCCESS;
+    }
+    catch (const std::exception &e)
+    {
+        LOG_ERROR("Error resetting frame counters: " << e.what());
+        return CODE_RESET_STATISTICS_FAILED;
+    }
+}
+
 // Stops the specified card and releases its resources for the given channel(s)
 // Disables flow control, releases video writers, and deallocates memory buffers
 // Optionally re-enables flow control after cleanup

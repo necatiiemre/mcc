@@ -58,7 +58,7 @@ static void scheduleStatisticsResetIn60s()
                 dvi_manager.channel_2.frame_counter.load(),
                 dvi_manager.channel_2.error_frame_counter.load());
         fflush(stderr);
-        try { driver_manager.resetStatistics(CARD_BOTH); } catch (...) {}
+        try { driver_manager.resetFrameCounters(CARD_BOTH); } catch (...) {}
         try { dvi_manager.resetStatistics(0); } catch (...) {}
         try { dvi_manager.resetStatistics(1); } catch (...) {}
         fprintf(stderr, "[FD] after reset:  dvi_ch1.frames=%d errors=%d  dvi_ch2.frames=%d errors=%d\n",

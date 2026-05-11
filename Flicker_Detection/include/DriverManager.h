@@ -57,6 +57,7 @@ public:
     uint8_t startVideoCapture();
     uint8_t stopVideoCapture();
     uint8_t resetStatistics(Card card);
+    uint8_t resetFrameCounters(Card card);
     uint8_t printStatistics();
     uint8_t closeCard(UINT_PTR &driver, void *mem1, void *mem2, const std::string &cardName);
     uint8_t stopFlickerDetection();
