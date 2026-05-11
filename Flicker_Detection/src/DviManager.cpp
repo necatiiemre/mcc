@@ -303,6 +303,8 @@ uint8_t DviManager::start(int channel)
 
         if ((channel == 0 || channel == 2) && !channel_1.is_running)
         {
+            channel_1.frame_queue_channel = std::make_unique<ThreadSafeQueue<std::unique_ptr<cv::Mat>>>();
+            channel_1.display_queue_channel = std::make_unique<ThreadSafeQueue<std::unique_ptr<cv::Mat>>>();
             channel_1.is_running = true;
             producerThread1 = std::thread(&DviManager::producer_worker, this, dviDeviceChannel1, 0, 12);
             consumerThread1 = std::thread(&DviManager::consumer_worker, this, 0, 12);
@@ -312,6 +314,8 @@ uint8_t DviManager::start(int channel)
 
         if ((channel == 1 || channel == 2) && !channel_2.is_running)
         {
+            channel_2.frame_queue_channel = std::make_unique<ThreadSafeQueue<std::unique_ptr<cv::Mat>>>();
+            channel_2.display_queue_channel = std::make_unique<ThreadSafeQueue<std::unique_ptr<cv::Mat>>>();
             channel_2.is_running = true;
             producerThread2 = std::thread(&DviManager::producer_worker, this, dviDeviceChannel2, 1, 14);
             consumerThread2 = std::thread(&DviManager::consumer_worker, this, 1, 14);
@@ -332,11 +336,11 @@ uint8_t DviManager::stop(int channel)
     try
     {
         cout << "Stop trigger" << endl;
-        if ((channel == 0 || channel == 2) && channel_1.is_running.load())
+        if (channel == 0 || channel == 2)
         {
             channel_1.is_running = false;
-            channel_1.frame_queue_channel->notify_all();
-            channel_1.display_queue_channel->notify_all();
+            channel_1.frame_queue_channel->shutdown();
+            channel_1.display_queue_channel->shutdown();
 
             if (producerThread1.joinable())
                 producerThread1.join();
@@ -348,11 +352,11 @@ uint8_t DviManager::stop(int channel)
             LOG_INFO("Stopped DVI Channel 1.");
         }
 
-        if ((channel == 1 || channel == 2) && channel_2.is_running.load())
+        if (channel == 1 || channel == 2)
         {
             channel_2.is_running = false;
-            channel_2.frame_queue_channel->notify_all();
-            channel_2.display_queue_channel->notify_all();
+            channel_2.frame_queue_channel->shutdown();
+            channel_2.display_queue_channel->shutdown();
 
             if (producerThread2.joinable())
                 producerThread2.join();
