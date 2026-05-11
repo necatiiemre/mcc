@@ -219,7 +219,7 @@ uint8_t DviManager::consumer_worker(int channelId, int core)
         int elapsedHours   = static_cast<int>(elapsedSecondsTotal / 3600);
         int elapsedMinutes = static_cast<int>((elapsedSecondsTotal % 3600) / 60);
         int elapsedSeconds = static_cast<int>(elapsedSecondsTotal % 60);
-        char elapsedBuf[16];
+        char elapsedBuf[32];
         std::snprintf(elapsedBuf, sizeof(elapsedBuf), "%02d:%02d:%02d",
                       elapsedHours, elapsedMinutes, elapsedSeconds);
 
