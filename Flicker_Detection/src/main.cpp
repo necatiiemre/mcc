@@ -21,11 +21,24 @@
 std::atomic<bool> stopRequested{false};
 
 static std::atomic<bool> g_shutdown_signal{false};
+static std::atomic<bool> g_systems_stopped{false};
 
 static void shutdown_signal_handler(int /*sig*/)
 {
     g_shutdown_signal = true;
     stopRequested = true;
+}
+
+static void stopAllSystemsOnce()
+{
+    bool expected = false;
+    if (!g_systems_stopped.compare_exchange_strong(expected, true))
+        return;
+    fprintf(stderr, "[shutdown] stopAllSystemsOnce: stopFlickerDetection start\n");
+    driver_manager.stopFlickerDetection();
+    fprintf(stderr, "[shutdown] stopAllSystemsOnce: stopFlickerDetection done\n");
+    dvi_manager.stop(2);
+    fprintf(stderr, "[shutdown] stopAllSystemsOnce: dvi_manager.stop done\n");
 }
 
 /* Velocity Flicker Detection Thread */
@@ -99,11 +112,7 @@ void processCommands()
         {
             std::cout << "Stopping all systems...\n";
             stopRequested = true;
-
-            rc = driver_manager.stopFlickerDetection();
-            checkReturnCode(rc, "Stop Flicker Detection Failed.");
-            rc = dvi_manager.stop(2);
-            checkReturnCode(rc, "DVI Manager stop failed.");
+            stopAllSystemsOnce();
             break;
         }
         else if (command == "stop card" || command == "3")
@@ -151,10 +160,7 @@ void processCommands()
         {
             std::cout << "Exiting, stopping all systems...\n";
             stopRequested = true;
-            rc = driver_manager.stopFlickerDetection();
-            checkReturnCode(rc, "Stop Flicker Detection Failed.");
-            rc = dvi_manager.stop(2);
-            checkReturnCode(rc, "DVI Manager stop failed.");
+            stopAllSystemsOnce();
             break;
         }
         else
@@ -231,8 +237,7 @@ int main(int argc, char** argv)
         while (!g_shutdown_signal) {
             std::this_thread::sleep_for(std::chrono::milliseconds(200));
         }
-        driver_manager.stopFlickerDetection();
-        dvi_manager.stop(2);
+        stopAllSystemsOnce();
     });
 
     std::thread velocity_thread;
@@ -281,11 +286,16 @@ int main(int argc, char** argv)
             command_thread = std::thread(processCommands);
         }
 
+        fprintf(stderr, "[shutdown] joining velocity_thread...\n");
         if (velocity_thread.joinable()) velocity_thread.join();
+        fprintf(stderr, "[shutdown] velocity_thread joined; joining dvi_thread...\n");
         if (dvi_thread.joinable()) dvi_thread.join();
+        fprintf(stderr, "[shutdown] dvi_thread joined; joining command_thread...\n");
         if (command_thread.joinable()) command_thread.join();
+        fprintf(stderr, "[shutdown] command_thread joined; releasing watcher...\n");
         g_shutdown_signal = true;
         if (shutdown_watcher.joinable()) shutdown_watcher.join();
+        fprintf(stderr, "[shutdown] watcher joined.\n");
         std::cout << "Program terminated successfully.\n";
         return 0;
     }
@@ -402,15 +412,20 @@ int main(int argc, char** argv)
     std::thread command_thread(processCommands);
 
     // Wait for all threads
+    fprintf(stderr, "[shutdown] joining velocity_thread...\n");
     if (velocity_thread.joinable())
         velocity_thread.join();
+    fprintf(stderr, "[shutdown] velocity_thread joined; joining dvi_thread...\n");
     if (dvi_thread.joinable())
         dvi_thread.join();
+    fprintf(stderr, "[shutdown] dvi_thread joined; joining command_thread...\n");
     if (command_thread.joinable())
         command_thread.join();
+    fprintf(stderr, "[shutdown] command_thread joined; releasing watcher...\n");
 
     g_shutdown_signal = true;
     if (shutdown_watcher.joinable()) shutdown_watcher.join();
+    fprintf(stderr, "[shutdown] watcher joined.\n");
 
     std::cout << "✅ Program terminated successfully.\n";
     return 0;

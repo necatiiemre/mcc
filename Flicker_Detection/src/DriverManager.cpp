@@ -437,19 +437,24 @@ uint8_t DriverManager::closeDrivers()
 {
     try
     {
+        fprintf(stderr, "[closeDrivers] -> closeCard(First_Driver=%lu)\n", (unsigned long)First_Driver);
         rc = closeCard(First_Driver, gpMem1_1, gpMem1_2, card_1);
         checkReturnCode(rc, "Close Driver Card 1 Failed");
         gpMem1_1 = nullptr;
         gpMem1_2 = nullptr;
+        fprintf(stderr, "[closeDrivers] First closed\n");
 
+        fprintf(stderr, "[closeDrivers] -> closeCard(Second_Driver=%lu)\n", (unsigned long)Second_Driver);
         rc = closeCard(Second_Driver, gpMem2_1, gpMem2_2, card_2);
         checkReturnCode(rc, "Close Driver Card 2 Failed");
         gpMem2_1 = nullptr;
         gpMem2_2 = nullptr;
+        fprintf(stderr, "[closeDrivers] Second closed\n");
         return CODE_SUCCESS;
     }
     catch (const std::exception &e)
     {
+        fprintf(stderr, "[closeDrivers] EXC: %s\n", e.what());
         LOG_ERROR("Error closing drivers: " << e.what());
         return CODE_CLOSE_VELOCITY_DRIVER_FAILED;
     }
@@ -2195,32 +2200,39 @@ uint8_t DriverManager::stopVideoCapture()
 {
     try
     {
+        fprintf(stderr, "[stopVideoCapture] -> setFlowControl(false)\n");
         rc = setFlowControl(false);
         checkReturnCode(rc, "setFlowControl failed");
+        fprintf(stderr, "[stopVideoCapture] setFlowControl done\n");
 
         if (driver_manager.First_Driver != 0)
         {
+            fprintf(stderr, "[stopVideoCapture] stopping CARD_1 threads\n");
             stopCard1Channel1Thread();
             stopCard1Channel2Thread();
         }
         if (driver_manager.Second_Driver != 0)
         {
+            fprintf(stderr, "[stopVideoCapture] stopping CARD_2 threads\n");
             stopCard2Channel1Thread();
             stopCard2Channel2Thread();
         }
 
         usleep(200000);
 
+        fprintf(stderr, "[stopVideoCapture] releasing video writers\n");
         video_card1_ch1.release();
         video_card1_ch2.release();
         video_card2_ch1.release();
         video_card2_ch2.release();
 
+        fprintf(stderr, "[stopVideoCapture] done\n");
         LOG_INFO("Video capturing stopped.");
         return CODE_SUCCESS;
     }
     catch (const std::exception &e)
     {
+        fprintf(stderr, "[stopVideoCapture] EXC: %s\n", e.what());
         LOG_ERROR("Error stopping video capture: " << e.what());
         return CODE_STOP_VIDEO_CAPTURE_FAILED;
     }
@@ -2489,17 +2501,22 @@ uint8_t DriverManager::stopFlickerDetection()
 {
     try
     {
+        fprintf(stderr, "[stopFlickerDetection] enter\n");
         isRunning = false;
 
+        fprintf(stderr, "[stopFlickerDetection] -> stopVideoCapture\n");
         rc = stopVideoCapture();
         checkReturnCode(rc, "stopVideoCapture failed");
+        fprintf(stderr, "[stopFlickerDetection] stopVideoCapture done; -> cleanup\n");
         rc = cleanup();
         checkReturnCode(rc, "cleanup failed");
+        fprintf(stderr, "[stopFlickerDetection] cleanup done\n");
         LOG_INFO("Flicker Detection Stopped.");
         return CODE_SUCCESS;
     }
     catch (const std::exception &e)
     {
+        fprintf(stderr, "[stopFlickerDetection] EXC: %s\n", e.what());
         LOG_ERROR("Error stopping flicker detection: " << e.what());
         return CODE_STOP_FLICKER_DETECTION_FAILED;
     }
