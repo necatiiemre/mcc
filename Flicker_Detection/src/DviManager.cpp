@@ -272,7 +272,8 @@ void DviManager::display_worker(int channelId, int coreId)
     }
 
     cv::destroyWindow(windowName);
-    cv::waitKey(10);
+    for (int i = 0; i < 10; ++i)
+        cv::waitKey(10);
     LOG_INFO("Display thread for channel " << channelId << " has stopped.");
 }
 

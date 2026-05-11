@@ -39,6 +39,16 @@ static void stopAllSystemsOnce()
     fprintf(stderr, "[shutdown] stopAllSystemsOnce: stopFlickerDetection done\n");
     dvi_manager.stop(2);
     fprintf(stderr, "[shutdown] stopAllSystemsOnce: dvi_manager.stop done\n");
+    try
+    {
+        cv::destroyAllWindows();
+        for (int i = 0; i < 10; ++i)
+            cv::waitKey(10);
+    }
+    catch (...)
+    {
+    }
+    fprintf(stderr, "[shutdown] stopAllSystemsOnce: GUI windows destroyed\n");
 }
 
 /* Velocity Flicker Detection Thread */
