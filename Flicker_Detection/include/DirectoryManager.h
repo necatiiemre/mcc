@@ -24,6 +24,9 @@ enum Channel
 class DirectoryManager
 {
 public:
+    void setBaseOutputDir(const std::string &dir);
+    std::string getBaseOutputDir() const { return baseOutputDir; }
+
     uint8_t createDirectory(Card card, Channel channel,
                             std::optional<Card> card2 = std::nullopt,
                             std::optional<Channel> channel2 = std::nullopt, bool loopback_test = false);
@@ -44,9 +47,12 @@ public:
 
 private:
     uint8_t createNestedDirectories(const std::string &path);
+    std::string velocityBase() const;
+    std::string dviBase() const;
     std::map<std::string, std::string> folderPaths;
     std::string sessionTimestamp;
     std::map<std::string, std::string> sessionTimestamps;
+    std::string baseOutputDir;
 };
 
 uint8_t getCurrentTimestamp();

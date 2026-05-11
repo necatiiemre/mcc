@@ -12,7 +12,8 @@
 class Mmc
 {
 private:
-    /* data */
+    bool ensureLogDirectories();
+
 public:
     Mmc();
     ~Mmc();

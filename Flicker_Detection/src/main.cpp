@@ -192,6 +192,7 @@ struct CliConfig
     int dviChannel = 0;
     bool loopback = false;
     bool noCommands = false;
+    std::string outputDir;
 };
 
 static bool parseIntArg(const std::string& s, int& out)
@@ -218,6 +219,10 @@ static CliConfig parseArgs(int argc, char** argv)
         else if (a == "--dvi-channel") next(cfg.dviChannel);
         else if (a == "--loopback") cfg.loopback = true;
         else if (a == "--no-commands") cfg.noCommands = true;
+        else if (a == "--output-dir")
+        {
+            if (i + 1 < argc) cfg.outputDir = argv[++i];
+        }
         else
         {
             std::cerr << "Unknown argument: " << a << std::endl;
@@ -235,6 +240,11 @@ int main(int argc, char** argv)
     cv::ocl::setUseOpenCL(false);
 
     CliConfig cli = parseArgs(argc, argv);
+
+    if (!cli.outputDir.empty())
+    {
+        directory_manager.setBaseOutputDir(cli.outputDir);
+    }
 
     struct sigaction sa{};
     sa.sa_handler = shutdown_signal_handler;

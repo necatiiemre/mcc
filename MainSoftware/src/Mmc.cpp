@@ -1,8 +1,11 @@
 #include "Mmc.h"
+#include "Dtn.h"
+#include "FlickerDetectionRunner.h"
 #include "ReportManager.h"
 #include "SafeShutdown.h"
 #include "ErrorPrinter.h"
 #include "Utils.h"
+#include <filesystem>
 #include <iostream>
 #include <unistd.h>
 #include <iomanip>
@@ -16,6 +19,21 @@ Mmc::Mmc()
 
 Mmc::~Mmc()
 {
+}
+
+bool Mmc::ensureLogDirectories()
+{
+    try
+    {
+        std::filesystem::create_directories(LogPaths::MMC());
+        DEBUG_LOG("MMC: Log directories created/verified at " << LogPaths::MMC());
+        return true;
+    }
+    catch (const std::exception &e)
+    {
+        std::cerr << "MMC: Failed to create log directories: " << e.what() << std::endl;
+        return false;
+    }
 }
 
 bool Mmc::configureSequence()
@@ -74,6 +92,23 @@ bool Mmc::configureSequence()
 
     serial::sendSerialCommand("/dev/ttyACM0", "VMC_ID 1");
 
+    // Start local FlickerDetection. Parameters come from
+    // FlickerDetectionConfig::Mmc; log + error frames + videos go to LOGS/MMC/.
+    ensureLogDirectories();
+    FlickerDetectionRunner flicker;
+    std::string flicker_log    = LogPaths::MMC() + "/flicker_detection.log";
+    std::string flicker_output = LogPaths::MMC() + "/flicker_output";
+    if (!flicker.startForMmc(flicker_log, flicker_output))
+    {
+        ErrorPrinter::warn("FLICKER",
+            "MMC: FlickerDetection could not be started, continuing without it.");
+    }
+    else
+    {
+        std::cout << "MMC: FlickerDetection running (log: " << flicker_log
+                  << ", output: " << flicker_output << ")" << std::endl;
+    }
+
     for (int i = 0; i < 1000; i++)
     {
         if (i % 20 == 0)
@@ -92,6 +127,10 @@ bool Mmc::configureSequence()
 #endif
         }
     }
+
+    // Stop local FlickerDetection before powering down the unit
+    std::cout << "MMC: Stopping FlickerDetection..." << std::endl;
+    flicker.stop();
 
     if (!g_DeviceManager.enableOutput(PSUG300, false))
     {

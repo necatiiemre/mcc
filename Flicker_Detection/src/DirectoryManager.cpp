@@ -12,6 +12,25 @@
 
 namespace fs = std::filesystem;
 
+void DirectoryManager::setBaseOutputDir(const std::string &dir)
+{
+    baseOutputDir = dir;
+    if (!baseOutputDir.empty() && baseOutputDir.back() == '/')
+        baseOutputDir.pop_back();
+}
+
+std::string DirectoryManager::velocityBase() const
+{
+    return baseOutputDir.empty() ? std::string("output_velocity")
+                                 : baseOutputDir + "/output_velocity";
+}
+
+std::string DirectoryManager::dviBase() const
+{
+    return baseOutputDir.empty() ? std::string("output_dvi")
+                                 : baseOutputDir + "/output_dvi";
+}
+
 // Timestamp generator (format: YYYY-MM-DD_HH-MM-SS)
 // Returns the current local time formatted as a string safe for filenames or logs
 // @return string representing the current timestamp (e.g., "2025-04-08_10-04-08")
@@ -114,7 +133,7 @@ uint8_t DirectoryManager::createDirectory(Card card, Channel channel,
             auto addLoopbackPath = [&](Card c, Channel ch)
             {
                 std::string cardName = (c == CARD_1) ? "card1" : "card2";
-                std::string basePath = "output_velocity/output_" + cardName + "/loopback";
+                std::string basePath = velocityBase() + "/output_" + cardName + "/loopback";
 
                 if (ch == CH_BOTH || ch == CH_1)
                 {
@@ -160,7 +179,7 @@ uint8_t DirectoryManager::createDirectory(Card card, Channel channel,
             std::string cardName = (c == CARD_1) ? "card1" : "card2";
             std::string channelName = (ch == CH_1) ? "ch1" : "ch2";
 
-            std::string cardPath = "output_velocity/output_" + cardName;
+            std::string cardPath = velocityBase() + "/output_" + cardName;
             createNestedDirectories(cardPath);
 
             std::string errorPath = cardPath + "/error_frames_" + channelName;
@@ -281,7 +300,7 @@ uint8_t DirectoryManager::createDviDirectories()
 
     try
     {
-        std::string base = "output_dvi";
+        std::string base = dviBase();
 
         rc = createNestedDirectories(base + "/error_frames_channel1");
         checkReturnCode(rc, "Failed to create error_frames_channel1 directory for DVI error frames.");
@@ -381,7 +400,7 @@ uint8_t DirectoryManager::createLoopbackDirectories(Card card)
     try
     {
         std::string cardName = (card == CARD_1) ? "card1" : "card2";
-        std::string basePath = "output_velocity/output_" + cardName + "/loopback";
+        std::string basePath = velocityBase() + "/output_" + cardName + "/loopback";
 
         std::string ch1Path = basePath + "/ch1";
         std::string ch2Path = basePath + "/ch2";
