@@ -214,19 +214,19 @@ uint8_t DviManager::consumer_worker(int channelId, int core)
         getCurrentTimestamp(timeStr);
         float temperature = channel.temperature.load();
 
-        cv::putText(currentFrame, "Time: " + timeStr, cv::Point(10, 280),
-                    cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 255, 0), 2);
-        cv::putText(currentFrame, "FPS: " + std::to_string(channel.fps.load()), cv::Point(10, 310),
-                    cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 255, 0), 2);
-        cv::putText(currentFrame, "Frames: " + std::to_string(frameCounter), cv::Point(10, 340),
-                    cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 255, 0), 2);
-        cv::putText(currentFrame, "Errors: " + std::to_string(errorCounter), cv::Point(10, 370),
-                    cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 0, 255), 2);
+        cv::putText(currentFrame, "Time: " + timeStr, cv::Point(10, 290),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.56, cv::Scalar(0, 255, 0), 2);
+        cv::putText(currentFrame, "FPS: " + std::to_string(channel.fps.load()), cv::Point(10, 320),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.56, cv::Scalar(0, 255, 0), 2);
+        cv::putText(currentFrame, "Frames: " + std::to_string(frameCounter), cv::Point(10, 350),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.56, cv::Scalar(0, 255, 0), 2);
+        cv::putText(currentFrame, "Errors: " + std::to_string(errorCounter), cv::Point(10, 380),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.56, cv::Scalar(0, 0, 255), 2);
 
         int roundedTemp = static_cast<int>(std::round(temperature));
         cv::Scalar tempColor = (roundedTemp >= 85) ? cv::Scalar(0, 0, 255) : cv::Scalar(0, 255, 0);
         cv::putText(currentFrame, "Temp: " + std::to_string(roundedTemp) + " C",
-                    cv::Point(10, 400), cv::FONT_HERSHEY_SIMPLEX, 0.7,
+                    cv::Point(10, 410), cv::FONT_HERSHEY_SIMPLEX, 0.56,
                     tempColor, 2);
 
         writeFFmpegFrame(ffmpeg_pipe, currentFrame);
