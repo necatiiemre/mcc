@@ -215,6 +215,14 @@ uint8_t DviManager::consumer_worker(int channelId, int core)
         getCurrentTimestamp(timeStr);
         float temperature = channel.temperature.load();
 
+        auto elapsedSecondsTotal = std::chrono::duration_cast<std::chrono::seconds>(now - start_time).count();
+        int elapsedHours   = static_cast<int>(elapsedSecondsTotal / 3600);
+        int elapsedMinutes = static_cast<int>((elapsedSecondsTotal % 3600) / 60);
+        int elapsedSeconds = static_cast<int>(elapsedSecondsTotal % 60);
+        char elapsedBuf[16];
+        std::snprintf(elapsedBuf, sizeof(elapsedBuf), "%02d:%02d:%02d",
+                      elapsedHours, elapsedMinutes, elapsedSeconds);
+
         int currentFps = channel.fps.load();
         cv::Scalar fpsColor = (currentFps < 10) ? cv::Scalar(0, 0, 255) : cv::Scalar(0, 255, 0);
 
@@ -238,17 +246,19 @@ uint8_t DviManager::consumer_worker(int channelId, int core)
         }
         cv::putText(currentFrame, "Time: " + timeStr, cv::Point(10, 290),
                     cv::FONT_HERSHEY_SIMPLEX, 0.56, cv::Scalar(0, 255, 0), 2);
-        cv::putText(currentFrame, "FPS: " + std::to_string(currentFps), cv::Point(10, 320),
-                    cv::FONT_HERSHEY_SIMPLEX, 0.56, fpsColor, 2);
-        cv::putText(currentFrame, "Frames: " + std::to_string(frameCounter), cv::Point(10, 350),
+        cv::putText(currentFrame, std::string("Elapsed: ") + elapsedBuf, cv::Point(10, 320),
                     cv::FONT_HERSHEY_SIMPLEX, 0.56, cv::Scalar(0, 255, 0), 2);
-        cv::putText(currentFrame, "Errors: " + std::to_string(errorCounter), cv::Point(10, 380),
+        cv::putText(currentFrame, "FPS: " + std::to_string(currentFps), cv::Point(10, 350),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.56, fpsColor, 2);
+        cv::putText(currentFrame, "Frames: " + std::to_string(frameCounter), cv::Point(10, 380),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.56, cv::Scalar(0, 255, 0), 2);
+        cv::putText(currentFrame, "Errors: " + std::to_string(errorCounter), cv::Point(10, 410),
                     cv::FONT_HERSHEY_SIMPLEX, 0.56, cv::Scalar(0, 0, 255), 2);
 
         int roundedTemp = static_cast<int>(std::round(temperature));
         cv::Scalar tempColor = (roundedTemp >= 85) ? cv::Scalar(0, 0, 255) : cv::Scalar(0, 255, 0);
         cv::putText(currentFrame, "Temp: " + std::to_string(roundedTemp) + " C",
-                    cv::Point(10, 410), cv::FONT_HERSHEY_SIMPLEX, 0.56,
+                    cv::Point(10, 440), cv::FONT_HERSHEY_SIMPLEX, 0.56,
                     tempColor, 2);
 
         writeFFmpegFrame(ffmpeg_pipe, currentFrame);
