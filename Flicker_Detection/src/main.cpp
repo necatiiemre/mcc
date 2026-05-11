@@ -29,6 +29,22 @@ static void shutdown_signal_handler(int /*sig*/)
     stopRequested = true;
 }
 
+static void scheduleStatisticsResetIn60s()
+{
+    std::thread([]() {
+        for (int i = 0; i < 600; ++i)
+        {
+            if (g_shutdown_signal) return;
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        if (g_shutdown_signal) return;
+        std::cout << "[FD] 60s elapsed: resetting statistics" << std::endl;
+        try { driver_manager.resetStatistics(CARD_BOTH); } catch (...) {}
+        try { dvi_manager.resetStatistics(0); } catch (...) {}
+        try { dvi_manager.resetStatistics(1); } catch (...) {}
+    }).detach();
+}
+
 static void stopAllSystemsOnce()
 {
     bool expected = false;
@@ -306,6 +322,8 @@ int main(int argc, char** argv)
             command_thread = std::thread(processCommands);
         }
 
+        scheduleStatisticsResetIn60s();
+
         fprintf(stderr, "[shutdown] joining velocity_thread...\n");
         if (velocity_thread.joinable()) velocity_thread.join();
         fprintf(stderr, "[shutdown] velocity_thread joined; joining dvi_thread...\n");
@@ -427,6 +445,8 @@ int main(int argc, char** argv)
         std::cerr << "❌ Invalid mode selection.\n";
         return 1;
     }
+
+    scheduleStatisticsResetIn60s();
 
     // Start commands in separate thread
     std::thread command_thread(processCommands);
