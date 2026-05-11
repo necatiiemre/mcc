@@ -217,6 +217,18 @@ uint8_t DriverManager::initializeCardProperties(CardProperties &props)
 // Destructor - deallocates heap memory and releases associated resources
 DriverManager::~DriverManager()
 {
+    try
+    {
+        if (isRunning || First_Driver != 0 || Second_Driver != 0)
+        {
+            stopFlickerDetection();
+        }
+    }
+    catch (...)
+    {
+        // best effort - process is going down anyway
+    }
+
     rc = releaseResources();
     checkReturnCode(rc, "Release Resources Failed");
 }
@@ -379,43 +391,35 @@ u_int8_t DriverManager::closeCard(UINT_PTR &driver, void *mem1, void *mem2, cons
     {
         if (driver != 0)
         {
-            rc = GRTV_MemBufFree(driver, (UINT_PTR)mem1);
-            if (rc == 0)
+            if (mem1 != nullptr)
             {
-                LOG_INFO("Channel 1 cleaned Card " << cardName.c_str());
-            }
-            else
-            {
-                LOG_ERROR("Failed to free memory buffer for channel 1 of " << cardName.c_str());
-                throw std::runtime_error("Failed to free memory buffer for channel 1");
+                rc = GRTV_MemBufFree(driver, (UINT_PTR)mem1);
+                if (rc == 0)
+                    LOG_INFO("Channel 1 cleaned Card " << cardName.c_str());
+                else
+                    LOG_ERROR("Failed to free memory buffer for channel 1 of " << cardName.c_str() << " rc=" << rc);
             }
 
-            rc = GRTV_MemBufFree(driver, (UINT_PTR)mem2);
-            if (rc == 0)
+            if (mem2 != nullptr)
             {
-                LOG_INFO("Channel 2 cleaned Card " << cardName.c_str());
-            }
-            else
-            {
-                LOG_ERROR("Failed to free memory buffer for channel 2 of " << cardName.c_str());
-                throw std::runtime_error("Failed to free memory buffer for channel 2");
+                rc = GRTV_MemBufFree(driver, (UINT_PTR)mem2);
+                if (rc == 0)
+                    LOG_INFO("Channel 2 cleaned Card " << cardName.c_str());
+                else
+                    LOG_ERROR("Failed to free memory buffer for channel 2 of " << cardName.c_str() << " rc=" << rc);
             }
 
             rc = GRTV_CloseDriver(driver);
             if (rc == 0)
-            {
                 LOG_INFO("Closed card " << cardName << " driver.");
-            }
             else
-            {
                 LOG_ERROR("Failed to close driver for " << cardName << ": " << rc);
-                throw std::runtime_error("Failed to close driver");
-            }
+
             driver = 0;
         }
         else
         {
-            LOG_WARN("Card already closed" << cardName);
+            LOG_WARN("Card already closed " << cardName);
         }
         return CODE_SUCCESS;
     }
@@ -435,8 +439,13 @@ uint8_t DriverManager::closeDrivers()
     {
         rc = closeCard(First_Driver, gpMem1_1, gpMem1_2, card_1);
         checkReturnCode(rc, "Close Driver Card 1 Failed");
+        gpMem1_1 = nullptr;
+        gpMem1_2 = nullptr;
+
         rc = closeCard(Second_Driver, gpMem2_1, gpMem2_2, card_2);
         checkReturnCode(rc, "Close Driver Card 2 Failed");
+        gpMem2_1 = nullptr;
+        gpMem2_2 = nullptr;
         return CODE_SUCCESS;
     }
     catch (const std::exception &e)
@@ -2186,11 +2195,6 @@ uint8_t DriverManager::stopVideoCapture()
 {
     try
     {
-        video_card1_ch1.release();
-        video_card1_ch2.release();
-        video_card2_ch1.release();
-        video_card2_ch2.release();
-
         rc = setFlowControl(false);
         checkReturnCode(rc, "setFlowControl failed");
 
@@ -2204,8 +2208,15 @@ uint8_t DriverManager::stopVideoCapture()
             stopCard2Channel1Thread();
             stopCard2Channel2Thread();
         }
+
+        usleep(200000);
+
+        video_card1_ch1.release();
+        video_card1_ch2.release();
+        video_card2_ch1.release();
+        video_card2_ch2.release();
+
         LOG_INFO("Video capturing stopped.");
-        usleep(500000);
         return CODE_SUCCESS;
     }
     catch (const std::exception &e)

@@ -116,7 +116,7 @@ uint8_t startFlickerDetection(Card card_1, Channel channel_1,
     catch (const std::exception &e)
     {
         LOG_ERROR("Error: " << e.what());
-        driver_manager.cleanup();
+        driver_manager.stopFlickerDetection();
         return CODE_START_FLICKER_DETECTION_FAILED;
     }
 }

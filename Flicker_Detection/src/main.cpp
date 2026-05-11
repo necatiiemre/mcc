@@ -149,7 +149,12 @@ void processCommands()
         }
         else if (command == "exit" || command == "7")
         {
+            std::cout << "Exiting, stopping all systems...\n";
             stopRequested = true;
+            rc = driver_manager.stopFlickerDetection();
+            checkReturnCode(rc, "Stop Flicker Detection Failed.");
+            rc = dvi_manager.stop(2);
+            checkReturnCode(rc, "DVI Manager stop failed.");
             break;
         }
         else
@@ -215,6 +220,21 @@ int main(int argc, char** argv)
 
     CliConfig cli = parseArgs(argc, argv);
 
+    struct sigaction sa{};
+    sa.sa_handler = shutdown_signal_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    sigaction(SIGTERM, &sa, nullptr);
+    sigaction(SIGINT, &sa, nullptr);
+
+    std::thread shutdown_watcher([]() {
+        while (!g_shutdown_signal) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        }
+        driver_manager.stopFlickerDetection();
+        dvi_manager.stop(2);
+    });
+
     std::thread velocity_thread;
     std::thread dvi_thread;
 
@@ -256,25 +276,7 @@ int main(int argc, char** argv)
         }
 
         std::thread command_thread;
-        std::thread shutdown_watcher;
-        if (cli.noCommands)
-        {
-            struct sigaction sa{};
-            sa.sa_handler = shutdown_signal_handler;
-            sigemptyset(&sa.sa_mask);
-            sa.sa_flags = 0;
-            sigaction(SIGTERM, &sa, nullptr);
-            sigaction(SIGINT, &sa, nullptr);
-
-            shutdown_watcher = std::thread([]() {
-                while (!g_shutdown_signal) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(200));
-                }
-                driver_manager.stopFlickerDetection();
-                dvi_manager.stop(2);
-            });
-        }
-        else
+        if (!cli.noCommands)
         {
             command_thread = std::thread(processCommands);
         }
@@ -282,6 +284,7 @@ int main(int argc, char** argv)
         if (velocity_thread.joinable()) velocity_thread.join();
         if (dvi_thread.joinable()) dvi_thread.join();
         if (command_thread.joinable()) command_thread.join();
+        g_shutdown_signal = true;
         if (shutdown_watcher.joinable()) shutdown_watcher.join();
         std::cout << "Program terminated successfully.\n";
         return 0;
@@ -405,6 +408,9 @@ int main(int argc, char** argv)
         dvi_thread.join();
     if (command_thread.joinable())
         command_thread.join();
+
+    g_shutdown_signal = true;
+    if (shutdown_watcher.joinable()) shutdown_watcher.join();
 
     std::cout << "✅ Program terminated successfully.\n";
     return 0;
