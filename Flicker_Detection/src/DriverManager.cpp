@@ -1172,7 +1172,8 @@ void DriverManager::handleCard1Channel1(UINT32 *data)
 
             sprintf(buffer_card1_channel_1, "FPS: %d", int(driver_manager.fps_card1_ch1));
             cv::putText(bgrImage_card1_channel1, buffer_card1_channel_1, cv::Point(bgrImage_card1_channel1.cols - 140, 930),
-                        cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(0, 255, 0), 2);
+                        cv::FONT_HERSHEY_SIMPLEX, 1,
+                        (driver_manager.fps_card1_ch1 < 10 ? cv::Scalar(0, 0, 255) : cv::Scalar(0, 255, 0)), 2);
         }
         else
         {
@@ -1182,7 +1183,8 @@ void DriverManager::handleCard1Channel1(UINT32 *data)
 
             sprintf(buffer_card1_channel_1, "FPS: %d", int(driver_manager.fps_card1_ch1));
             cv::putText(bgrImage_card1_channel1, buffer_card1_channel_1, cv::Point(bgrImage_card1_channel1.cols - 140, 40),
-                        cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(0, 255, 0), 2);
+                        cv::FONT_HERSHEY_SIMPLEX, 1,
+                        (driver_manager.fps_card1_ch1 < 10 ? cv::Scalar(0, 0, 255) : cv::Scalar(0, 255, 0)), 2);
 
             sprintf(buffer_card1_channel_1, "Card: %s", driver_manager.card_1.c_str());
             cv::putText(bgrImage_card1_channel1, buffer_card1_channel_1, cv::Point(15, bgrImage_card1_channel1.rows - 780),
@@ -1308,7 +1310,8 @@ void DriverManager::handleCard1Channel2(UINT32 *data)
 
             sprintf(buffer_card1_channel_2, "FPS: %d", int(driver_manager.fps_card1_ch2));
             cv::putText(bgrImage_card1_channel2, buffer_card1_channel_2, cv::Point(bgrImage_card1_channel2.cols - 140, 930),
-                        cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(0, 255, 0), 2);
+                        cv::FONT_HERSHEY_SIMPLEX, 1,
+                        (driver_manager.fps_card1_ch2 < 10 ? cv::Scalar(0, 0, 255) : cv::Scalar(0, 255, 0)), 2);
         }
         else
         {
@@ -1318,7 +1321,8 @@ void DriverManager::handleCard1Channel2(UINT32 *data)
 
             sprintf(buffer_card1_channel_2, "FPS: %d", int(driver_manager.fps_card1_ch2));
             cv::putText(bgrImage_card1_channel2, buffer_card1_channel_2, cv::Point(bgrImage_card1_channel2.cols - 140, 40),
-                        cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(0, 255, 0), 2);
+                        cv::FONT_HERSHEY_SIMPLEX, 1,
+                        (driver_manager.fps_card1_ch2 < 10 ? cv::Scalar(0, 0, 255) : cv::Scalar(0, 255, 0)), 2);
 
             sprintf(buffer_card1_channel_2, "Card: %s", driver_manager.card_1.c_str());
             cv::putText(bgrImage_card1_channel2, buffer_card1_channel_2, cv::Point(15, bgrImage_card1_channel2.rows - 780),
@@ -1448,7 +1452,8 @@ void DriverManager::handleCard2Channel1(UINT32 *data)
         {
             sprintf(buffer_card2_channel_1, "FPS: %d", int(driver_manager.fps_card2_ch1));
             cv::putText(bgrImage_card2_channel1, buffer_card2_channel_1, cv::Point(bgrImage_card2_channel1.cols - 140, 930),
-                        cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(0, 255, 0), 2);
+                        cv::FONT_HERSHEY_SIMPLEX, 1,
+                        (driver_manager.fps_card2_ch1 < 10 ? cv::Scalar(0, 0, 255) : cv::Scalar(0, 255, 0)), 2);
 
             sprintf(buffer_card2_channel_1, "Temperature: %d", jtemp_card2_channel1);
             cv::putText(bgrImage_card2_channel1, buffer_card2_channel_1, cv::Point(bgrImage_card2_channel1.cols - 270, 980),
@@ -1462,7 +1467,8 @@ void DriverManager::handleCard2Channel1(UINT32 *data)
 
             sprintf(buffer_card2_channel_1, "FPS: %d", int(driver_manager.fps_card2_ch1));
             cv::putText(bgrImage_card2_channel1, buffer_card2_channel_1, cv::Point(bgrImage_card2_channel1.cols - 140, 40),
-                        cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(0, 255, 0), 2);
+                        cv::FONT_HERSHEY_SIMPLEX, 1,
+                        (driver_manager.fps_card2_ch1 < 10 ? cv::Scalar(0, 0, 255) : cv::Scalar(0, 255, 0)), 2);
 
             sprintf(buffer_card2_channel_1, "Card: %s", driver_manager.card_2.c_str());
             cv::putText(bgrImage_card2_channel1, buffer_card2_channel_1, cv::Point(15, bgrImage_card2_channel1.rows - 780),
@@ -1587,7 +1593,8 @@ void DriverManager::handleCard2Channel2(UINT32 *data)
         {
             sprintf(buffer_card2_channel_2, "FPS: %d", int(driver_manager.fps_card2_ch2));
             cv::putText(bgrImage_card2_channel2, buffer_card2_channel_2, cv::Point(bgrImage_card2_channel2.cols - 140, 930),
-                        cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(0, 255, 0), 2);
+                        cv::FONT_HERSHEY_SIMPLEX, 1,
+                        (driver_manager.fps_card2_ch2 < 10 ? cv::Scalar(0, 0, 255) : cv::Scalar(0, 255, 0)), 2);
 
             sprintf(buffer_card2_channel_2, "Temperature: %d", jtemp_card2_channel2);
             cv::putText(bgrImage_card2_channel2, buffer_card2_channel_2, cv::Point(bgrImage_card2_channel2.cols - 270, 980),
@@ -1601,7 +1608,8 @@ void DriverManager::handleCard2Channel2(UINT32 *data)
 
             sprintf(buffer_card2_channel_2, "FPS: %d", int(driver_manager.fps_card2_ch2));
             cv::putText(bgrImage_card2_channel2, buffer_card2_channel_2, cv::Point(bgrImage_card2_channel2.cols - 140, 40),
-                        cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(0, 255, 0), 2);
+                        cv::FONT_HERSHEY_SIMPLEX, 1,
+                        (driver_manager.fps_card2_ch2 < 10 ? cv::Scalar(0, 0, 255) : cv::Scalar(0, 255, 0)), 2);
 
             sprintf(buffer_card2_channel_2, "Card: %s", driver_manager.card_2.c_str());
             cv::putText(bgrImage_card2_channel2, buffer_card2_channel_2, cv::Point(15, bgrImage_card2_channel2.rows - 780),

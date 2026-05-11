@@ -214,10 +214,12 @@ uint8_t DviManager::consumer_worker(int channelId, int core)
         getCurrentTimestamp(timeStr);
         float temperature = channel.temperature.load();
 
+        int currentFps = channel.fps.load();
+        cv::Scalar fpsColor = (currentFps < 10) ? cv::Scalar(0, 0, 255) : cv::Scalar(0, 255, 0);
         cv::putText(currentFrame, "Time: " + timeStr, cv::Point(10, 290),
                     cv::FONT_HERSHEY_SIMPLEX, 0.56, cv::Scalar(0, 255, 0), 2);
-        cv::putText(currentFrame, "FPS: " + std::to_string(channel.fps.load()), cv::Point(10, 320),
-                    cv::FONT_HERSHEY_SIMPLEX, 0.56, cv::Scalar(0, 255, 0), 2);
+        cv::putText(currentFrame, "FPS: " + std::to_string(currentFps), cv::Point(10, 320),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.56, fpsColor, 2);
         cv::putText(currentFrame, "Frames: " + std::to_string(frameCounter), cv::Point(10, 350),
                     cv::FONT_HERSHEY_SIMPLEX, 0.56, cv::Scalar(0, 255, 0), 2);
         cv::putText(currentFrame, "Errors: " + std::to_string(errorCounter), cv::Point(10, 380),
