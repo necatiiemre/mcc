@@ -30,8 +30,8 @@ namespace
 {
     const char *dviDeviceChannel1 = "/dev/video0";
     const char *dviDeviceChannel2 = "/dev/video1";
-    const int WIDTH = 1920;
-    const int HEIGHT = 1080;
+    const int WIDTH = 1280;
+    const int HEIGHT = 1024;
     const int PIXEL_FORMAT = V4L2_PIX_FMT_YUYV;
 
     void setThreadAffinity(int coreId)
@@ -143,7 +143,7 @@ uint8_t DviManager::consumer_worker(int channelId, int core)
     rc = getCurrentTimestamp(time_stamp);
     videoFile = videoPath + "/" + time_stamp + ".avi";
 
-    FILE *ffmpeg_pipe = startFFmpegWriter(videoFile, width_1920, height_1080);
+    FILE *ffmpeg_pipe = startFFmpegWriter(videoFile, width_1280, height_1024);
 
     DviChannel &channel = (channelId == 0) ? channel_1 : channel_2;
     auto &frameQueue = *channel.frame_queue_channel;
