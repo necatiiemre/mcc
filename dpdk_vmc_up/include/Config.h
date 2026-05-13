@@ -537,4 +537,12 @@ static const char * const vmc_port_labels[VMC_PORT_COUNT] = {
     "J5-1", "J5-2", "J5-3", "J5-4"    /* VMC 12-15: Port 3 Q0-Q3 */
 };
 
+// ==========================================
+// PTP (IEEE 1588v2) FLOWS
+// ==========================================
+// Two role-distinct mechanisms share the same PTPv2 wire format (msg types
+// Sync=0x00, Delay_Req=0x01, Delay_Resp=0x09) and the same dedicated RX/TX
+// queues on each carrying port. The actual flow table lives in src/ptp/ptp.c
+// (definition) and is referenced through the extern declaration in ptp.h.
+
 #endif /* CONFIG_H */

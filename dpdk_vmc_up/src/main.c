@@ -20,6 +20,7 @@
 #include <health_monitor.h>  // HM printer thread start/stop
 #include "PsuTelemetry.h"          // wire format (shared with MainSoftware)
 #include "PsuTelemetryReceiver.h"  // receiver API for MainSoftware UDP pushes
+#include "ptp.h"                   // PTPv2 master/slave engine
 
 // Check if --daemon flag is present and remove it from argv
 // Returns true if --daemon was found, also updates argc
@@ -208,11 +209,18 @@ int main(int argc, char const *argv[])
         // Base: NUM_TX_CORES (0 to NUM_TX_CORES-1)
         uint16_t num_tx_queues = NUM_TX_CORES;
 
+        // Reserve one extra TX/RX queue on every port carrying a PTP flow.
+        // The PTP module uses fixed queue indices (PTP_*_QUEUE_ID = NUM_*_CORES).
+        if (ptp_port_has_flow(port_id))
+            num_tx_queues += 1;
+
         txrx_configs[i].nb_tx_queues = num_tx_queues;
 
         // Calculate number of RX queues needed
         // Base: NUM_RX_CORES (0 to NUM_RX_CORES-1)
         uint16_t num_rx_queues = NUM_RX_CORES;
+        if (ptp_port_has_flow(port_id))
+            num_rx_queues += 1;
 
         txrx_configs[i].nb_rx_queues = num_rx_queues;
         txrx_configs[i].mbuf_pool = mbuf_pool;
@@ -232,6 +240,11 @@ int main(int argc, char const *argv[])
     print_ports_info(&ports_config);
 
     printf("All ports configured\n");
+
+    // PTP engine: spawn polling thread after the data-path queues are up.
+    if (ptp_init() != 0) {
+        printf("Warning: PTP engine init failed; continuing without 1588v2\n");
+    }
 
     // Start TX/RX workers
     printf("\n=== Starting Workers ===\n");
@@ -358,6 +371,9 @@ int main(int argc, char const *argv[])
         // Health monitor dashboard — stats tablosundan hemen sonra, sıralı akış
         hm_print_dashboard();
 
+        // PTP dashboard
+        ptp_print_dashboard();
+
         // PSU telemetry table (MainSoftware -> dpdk_vmc UDP stream).
         // Printed from main loop so visibility does not depend on
         // health-monitor internal formatting details.
@@ -389,6 +405,9 @@ int main(int argc, char const *argv[])
     }
 
     printf("\n=== Shutting down ===\n");
+
+    // Stop PTP polling thread (idempotent).
+    ptp_stop();
 
     // Stop PSU telemetry listener (idempotent - safe if never started).
     psu_telem_stop();

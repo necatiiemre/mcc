@@ -5,3 +5,6 @@
 dpdk_vmc/dpdk_app
 dpdk_vmc/dpdk_app-debug
 dpdk_vmc/dpdk_app-static
+dpdk_vmc_up/dpdk_app
+dpdk_vmc_up/dpdk_app-debug
+dpdk_vmc_up/dpdk_app-static
