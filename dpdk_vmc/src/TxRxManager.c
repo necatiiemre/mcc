@@ -1,5 +1,6 @@
 #include "TxRxManager.h"
 #include "AteMode.h"
+#include "ptp.h"
 #include <rte_lcore.h>
 #include <rte_launch.h>
 #include <rte_cycles.h>
@@ -1026,6 +1027,12 @@ int init_port_txrx(uint16_t port_id, struct txrx_config *config)
     // VMC mode: Set up VLAN-based flow steering (after port start)
     if (config->nb_rx_queues > 1)
     {
+        // PTP first — higher priority (0) than the PRBS VLAN rules (1) so that
+        // EtherType=0x88F7 frames sharing a VLAN with PRBS data still land on
+        // the dedicated PTP RX queue.
+        if (ptp_port_has_flow(port_id))
+            (void)ptp_flow_rules_install(port_id);
+
         printf("Port %u: Installing VMC VLAN→Queue flow rules...\n", port_id);
         int flow_ret = vmc_flow_rules_install(port_id);
         if (flow_ret != 0) {
