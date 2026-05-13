@@ -1,5 +1,6 @@
 #include "TxRxManager.h"
 #include "AteMode.h"
+#include "ptp.h"
 #include <rte_lcore.h>
 #include <rte_launch.h>
 #include <rte_cycles.h>
@@ -109,9 +110,6 @@ struct vmc_port_map_entry vmc_port_map[VMC_PORT_COUNT] = VMC_PORT_MAP_INIT;
 // VLAN → VMC port fast lookup table
 uint8_t vlan_to_vmc_port[VMC_VLAN_LOOKUP_SIZE];
 
-// VL-ID → VMC port lookup (per-packet dispatch). See TxRxManager.h.
-uint16_t vl_id_to_vmc_port[MAX_VL_ID + 1];
-
 // VLAN flow rule handles (for cleanup)
 #define VMC_MAX_FLOW_RULES_PER_PORT 4
 static struct rte_flow *vmc_flow_handles[MAX_PORTS][VMC_MAX_FLOW_RULES_PER_PORT] = {{NULL}};
@@ -157,25 +155,6 @@ static void init_tx_vl_sequences(void)
 }
 
 /**
- * Zero all TX VL-ID sequence counters without touching the spinlocks.
- * Called at warm-up → test transition so shared-queue stats do not carry
- * over warm-up residue into the test window. Takes the per-VL spinlocks
- * to avoid racing with in-flight peek/commit.
- */
-void reset_tx_vl_sequences(void)
-{
-    for (int port = 0; port < MAX_PORTS; port++)
-    {
-        for (int vl = 0; vl <= MAX_VL_ID; vl++)
-        {
-            rte_spinlock_lock(&tx_vl_sequences[port].locks[vl]);
-            tx_vl_sequences[port].sequence[vl] = 0;
-            rte_spinlock_unlock(&tx_vl_sequences[port].locks[vl]);
-        }
-    }
-}
-
-/**
  * Get next sequence for a VL-ID (thread-safe)
  */
 static inline uint64_t get_next_tx_sequence(uint16_t port_id, uint16_t vl_id)
@@ -188,17 +167,6 @@ static inline uint64_t get_next_tx_sequence(uint16_t port_id, uint16_t vl_id)
     rte_spinlock_unlock(&tx_vl_sequences[port_id].locks[vl_id]);
 
     return seq;
-}
-
-/**
- * Read TX sequence counter for a (port, VL-ID) — public accessor used by
- * stats display to split per-VMC TX counters across multiple flows.
- */
-uint64_t get_tx_vl_sequence(uint16_t port_id, uint16_t vl_id)
-{
-    if (vl_id > MAX_VL_ID || port_id >= MAX_PORTS)
-        return 0;
-    return __atomic_load_n(&tx_vl_sequences[port_id].sequence[vl_id], __ATOMIC_RELAXED);
 }
 
 /**
@@ -498,9 +466,7 @@ void init_rx_stats(void)
         for (int vl = 0; vl <= MAX_VL_ID; vl++)
         {
             port_vl_trackers[i].vl_trackers[vl].max_seq = 0;
-            port_vl_trackers[i].vl_trackers[vl].min_seq = 0;
             port_vl_trackers[i].vl_trackers[vl].pkt_count = 0;
-            port_vl_trackers[i].vl_trackers[vl].expected_seq = 0;
             port_vl_trackers[i].vl_trackers[vl].initialized = 0;  // 0=false, 1=true
         }
     }
@@ -514,56 +480,39 @@ void init_rx_stats(void)
 
 void init_vmc_port_map(void)
 {
-    // Fill the VLAN → VMC port lookup table (legacy; overwritten when VLAN
-    // is shared by multiple VMC flows — not used in per-packet hot path).
+    // Fill the VLAN → VMC port lookup table
     memset(vlan_to_vmc_port, VMC_VLAN_INVALID, sizeof(vlan_to_vmc_port));
 
-    // Fill VL-ID → VMC port lookup. Each active VL-ID maps to one flow.
-    for (size_t i = 0; i < sizeof(vl_id_to_vmc_port) / sizeof(vl_id_to_vmc_port[0]); i++) {
-        vl_id_to_vmc_port[i] = VMC_VL_ID_INVALID;
-    }
-
     for (int i = 0; i < VMC_DPDK_PORT_COUNT; i++) {
+        // VMC TX VLAN (VMC→Server, seen on server RX)
         if (vmc_port_map[i].tx_vlan < VMC_VLAN_LOOKUP_SIZE) {
             vlan_to_vmc_port[vmc_port_map[i].tx_vlan] = (uint8_t)i;
         }
-
-        uint32_t start = vmc_port_map[i].vl_id_start;
-        uint32_t count = vmc_port_map[i].vl_id_count;
-        for (uint32_t v = 0; v < count; v++) {
-            uint32_t vl = start + v;
-            if (vl > MAX_VL_ID) {
-                printf("Warning: VMC %d VL-ID %u exceeds MAX_VL_ID (%u), skipped\n",
-                       i, vl, MAX_VL_ID);
-                continue;
-            }
-            if (vl_id_to_vmc_port[vl] != VMC_VL_ID_INVALID) {
-                printf("Warning: VL-ID %u assigned to VMC %u, overwriting with VMC %d\n",
-                       vl, vl_id_to_vmc_port[vl], i);
-            }
-            vl_id_to_vmc_port[vl] = (uint16_t)i;
+        // VMC RX VLAN (Server→VMC, used in server TX)
+        // These VLANs should also be in the lookup (can be used in TX worker)
+        if (vmc_port_map[i].rx_vlan < VMC_VLAN_LOOKUP_SIZE) {
+            // We could also put rx_vlan in a separate lookup, tx_vlan is sufficient for now
+            // because PRBS check is done on server RX = via tx_vlan
         }
     }
 
     printf("\n=== VMC Port Mapping Initialized ===\n");
     printf("VMC Ports: %d (DPDK: %d, Raw: 2)\n", VMC_PORT_COUNT, VMC_DPDK_PORT_COUNT);
-    printf("VL-ID → VMC Port lookup table built (payload mode dispatch)\n");
+    printf("VLAN → VMC Port lookup table built\n");
 
-    // Print summary table (TX and RX VL-ID spans; equal for pure-PRBS cross)
-    printf("\n  VMC Port | VMC RX (Srv TX)      | VMC TX (Srv RX)      | TX VL-ID     | RX VL-ID     | Mode\n");
-    printf("  ---------+----------------------+----------------------+--------------+--------------+------------\n");
+    // Print summary table
+    printf("\n  VMC Port | VMC RX (Srv TX)      | VMC TX (Srv RX)\n");
+    printf("  ---------+----------------------+----------------------\n");
     for (int i = 0; i < VMC_DPDK_PORT_COUNT; i++) {
-        const struct vmc_port_map_entry *e = &vmc_port_map[i];
-        const char *mode = (e->payload_mode == VMC_PAYLOAD_PURE_PRBS) ? "pure PRBS"
-                                                                      : "splitmix+CRC";
-        printf("    %2d     | SrvPort%u Q%u VLAN%-3u | SrvPort%u Q%u VLAN%-3u | [%4u..%4u) | [%4u..%4u) | %s\n",
-               e->vmc_port_id,
-               e->rx_server_port, e->rx_server_queue, e->rx_vlan,
-               e->tx_server_port, e->tx_server_queue, e->tx_vlan,
-               e->tx_vl_id_start, e->tx_vl_id_start + e->vl_id_count,
-               e->vl_id_start,    e->vl_id_start    + e->vl_id_count,
-               mode);
+        printf("    %2d     | SrvPort%u Q%u VLAN%-3u | SrvPort%u Q%u VLAN%-3u\n",
+               vmc_port_map[i].vmc_port_id,
+               vmc_port_map[i].rx_server_port, vmc_port_map[i].rx_server_queue,
+               vmc_port_map[i].rx_vlan,
+               vmc_port_map[i].tx_server_port, vmc_port_map[i].tx_server_queue,
+               vmc_port_map[i].tx_vlan);
     }
+    printf("    32     | Port 12 (1G)         | Port 12 (1G)\n");
+    printf("    33     | Port 13 (100M)       | Port 13 (100M)\n");
     printf("================================================\n\n");
 }
 
@@ -1026,6 +975,12 @@ int init_port_txrx(uint16_t port_id, struct txrx_config *config)
     // VMC mode: Set up VLAN-based flow steering (after port start)
     if (config->nb_rx_queues > 1)
     {
+        // PTP first — higher priority (0) than the PRBS VLAN rules (1) so that
+        // EtherType=0x88F7 frames sharing a VLAN with PRBS data still land on
+        // the dedicated PTP RX queue.
+        if (ptp_port_has_flow(port_id))
+            (void)ptp_flow_rules_install(port_id);
+
         printf("Port %u: Installing VMC VLAN→Queue flow rules...\n", port_id);
         int flow_ret = vmc_flow_rules_install(port_id);
         if (flow_ret != 0) {
@@ -1258,26 +1213,6 @@ int tx_worker(void *arg)
     uint64_t next_send_time = rte_get_tsc_cycles() + stagger_offset;
 #endif
 
-    // Dual-lane pacing (VMC shared queues): independent next_send_time per lane.
-    const bool dual_lane = (params->loopback_vl_count > 0 || params->cross_vl_count > 0);
-    uint64_t lb_delay_cycles = 0, cr_delay_cycles = 0;
-    uint64_t lb_next_send = 0, cr_next_send = 0;
-    uint16_t lb_offset = 0, cr_offset = 0;
-    if (dual_lane) {
-        if (params->loopback_vl_count > 0 && params->loopback_gbps > 0.0) {
-            uint64_t lb_pps = (uint64_t)(params->loopback_gbps * 1e9 / 8.0 /
-                                         (double)PACKET_SIZE);
-            lb_delay_cycles = (lb_pps > 0) ? (tsc_hz / lb_pps) : tsc_hz;
-            lb_next_send = rte_get_tsc_cycles() + stagger_offset;
-        }
-        if (params->cross_vl_count > 0 && params->cross_gbps > 0.0) {
-            uint64_t cr_pps = (uint64_t)(params->cross_gbps * 1e9 / 8.0 /
-                                         (double)PACKET_SIZE);
-            cr_delay_cycles = (cr_pps > 0) ? (tsc_hz / cr_pps) : tsc_hz;
-            cr_next_send = rte_get_tsc_cycles() + stagger_offset + (tsc_hz / 400);
-        }
-    }
-
     printf("TX Worker started: Port %u, Queue %u, Lcore %u, VLAN %u, VL_RANGE [%u..%u)\n",
            params->port_id, params->queue_id, params->lcore_id, params->vlan_id, vl_start, vl_end);
 #if TOKEN_BUCKET_TX_ENABLED
@@ -1335,61 +1270,32 @@ int tx_worker(void *arg)
         // ==========================================
         uint64_t now = rte_get_tsc_cycles();
 
-        // Dual-lane: pick lane whose next_send_time is earliest, then
-        // use its delay for pacing. Fall through to single-lane legacy
-        // path when neither lane is configured.
-        bool picked_cross = false;
-        uint64_t *active_next = &next_send_time;
-        uint64_t active_delay = delay_cycles;
-        if (dual_lane) {
-            bool lb_ok = (lb_delay_cycles > 0);
-            bool cr_ok = (cr_delay_cycles > 0);
-            if (lb_ok && cr_ok) {
-                picked_cross = (cr_next_send < lb_next_send);
-            } else {
-                picked_cross = cr_ok;
-            }
-            active_next = picked_cross ? &cr_next_send : &lb_next_send;
-            active_delay = picked_cross ? cr_delay_cycles : lb_delay_cycles;
-        }
-
         // Wait until it's time (busy-wait for precision)
-        while (now < *active_next) {
+        while (now < next_send_time) {
             rte_pause();
             now = rte_get_tsc_cycles();
         }
 
 #if TOKEN_BUCKET_TX_ENABLED
         // If we fall behind, do PHASE-PRESERVING SKIP (burst prevention)
-        if (*active_next + active_delay < now) {
-            uint64_t periods_behind = (now - *active_next) / active_delay;
-            *active_next += periods_behind * active_delay;
+        // Instead of next_send_time = now, advance by N * delay_cycles
+        // This preserves the phase offset between workers
+        if (next_send_time + delay_cycles < now) {
+            uint64_t periods_behind = (now - next_send_time) / delay_cycles;
+            next_send_time += periods_behind * delay_cycles;
         }
 #else
         // If we fall behind, DO NOT CATCH UP (burst prevention)
-        if (*active_next + active_delay < now) {
-            *active_next = now;
+        if (next_send_time + delay_cycles < now) {
+            next_send_time = now;
         }
 #endif
-        *active_next += active_delay;
+        next_send_time += delay_cycles;
 
         // Single packet allocation
         pkt = rte_pktmbuf_alloc(params->mbuf_pool);
         if (unlikely(pkt == NULL)) {
             continue;  // Timing preserved, just skip this slot
-        }
-
-        uint16_t curr_vl;
-        if (dual_lane) {
-            if (picked_cross) {
-                curr_vl = params->cross_vl_start + cr_offset;
-                cr_offset = (uint16_t)((cr_offset + 1) % params->cross_vl_count);
-            } else {
-                curr_vl = params->loopback_vl_start + lb_offset;
-                lb_offset = (uint16_t)((lb_offset + 1) % params->loopback_vl_count);
-            }
-        } else {
-            curr_vl = vl_start + current_vl_offset;
         }
 
 #if TX_TEST_MODE_ENABLED
@@ -1402,6 +1308,8 @@ int tx_worker(void *arg)
         uint64_t pkt_num = rte_atomic64_add_return(&tx_packet_count_per_port[params->port_id], 1);
         local_pkt_counter++;
 
+        uint16_t curr_vl = vl_start + current_vl_offset;
+
         if (pkt_num % TX_SKIP_EVERY_N_PACKETS == 0)
         {
             // Test mode: intentional skip — consume sequence to create gap
@@ -1409,17 +1317,17 @@ int tx_worker(void *arg)
             printf("TX Worker Port %u: SKIPPING packet #%lu (VL %u, seq %lu)\n",
                    params->port_id, pkt_num, curr_vl, skip_seq);
             rte_pktmbuf_free(pkt);
-            if (!dual_lane) {
-                current_vl_offset++;
-                if (current_vl_offset >= vl_range_size)
-                    current_vl_offset = 0;
-            }
+            current_vl_offset++;
+            if (current_vl_offset >= vl_range_size)
+                current_vl_offset = 0;
             continue;
         }
 
         // Peek sequence WITHOUT incrementing — only commit after successful send
         uint64_t seq = peek_tx_sequence(params->port_id, curr_vl);
 #else
+        uint16_t curr_vl = vl_start + current_vl_offset;
+
         // Peek sequence WITHOUT incrementing — only commit after successful send
         uint64_t seq = peek_tx_sequence(params->port_id, curr_vl);
 #endif
@@ -1473,11 +1381,9 @@ int tx_worker(void *arg)
             rte_pktmbuf_free(pkt);
         }
 
-        if (!dual_lane) {
-            current_vl_offset++;
-            if (current_vl_offset >= vl_range_size)
-                current_vl_offset = 0;
-        }
+        current_vl_offset++;
+        if (current_vl_offset >= vl_range_size)
+            current_vl_offset = 0;
     }
 
 #if TX_TEST_MODE_ENABLED
@@ -1538,20 +1444,11 @@ int rx_worker(void *arg)
     const uint32_t FLUSH = 128;
 
 #if STATS_MODE_VMC
-    // Per-VMC local accumulators. Per-packet dispatch is keyed on VL-ID so a
-    // single queue may feed multiple VMC slots (e.g. Port 0 Q0 carries normal
-    // loopback + pure-PRBS cross return traffic).
-    struct vmc_local_accum {
-        uint64_t rx;
-        uint64_t good;
-        uint64_t bad;
-        uint64_t sm_fail;
-        uint64_t crc_fail;
-        uint64_t bit_errors;
-        uint64_t lost;
-    };
-    struct vmc_local_accum local_vmc[VMC_PORT_COUNT];
-    memset(local_vmc, 0, sizeof(local_vmc));
+    // In VMC mode: queue_id -> VLAN -> VMC port (1:1 mapping, flow steering active)
+    const uint16_t rx_vlan_for_queue = port_vlans[params->port_id].rx_vlans[params->queue_id];
+    const uint8_t my_vmc_port = (rx_vlan_for_queue < VMC_VLAN_LOOKUP_SIZE)
+                                    ? vlan_to_vmc_port[rx_vlan_for_queue]
+                                    : VMC_VLAN_INVALID;
 #endif
 
     bool first_good = false, first_bad = false;
@@ -1635,7 +1532,6 @@ int rx_worker(void *arg)
                 // VL-ID BASED SEQUENCE TRACKING
                 // Real-time gap detection + watermark tracking
                 // ==========================================
-                uint64_t pkt_gap_loss = 0;  // Per-packet gap, attributed to VMC below
                 if (vl_id <= MAX_VL_ID)
                 {
                     struct vl_sequence_tracker *seq_tracker = &vl_tracker->vl_trackers[vl_id];
@@ -1664,9 +1560,7 @@ int rx_worker(void *arg)
                         if (seq > expected)
                         {
                             // Gap detected - packets lost
-                            uint64_t gap = seq - expected;
-                            local_lost += gap;
-                            pkt_gap_loss = gap;
+                            local_lost += (seq - expected);
 #if TOKEN_BUCKET_TX_ENABLED
                             printf("*** LOSS DETECTED [DPDK] Port %u Q%u: VL-ID=%u expected_seq=%lu got_seq=%lu gap=%lu (src_port=%u) ***\n",
                                    params->port_id, params->queue_id, vl_id, expected, seq, seq - expected, params->src_port_id);
@@ -1696,37 +1590,14 @@ int rx_worker(void *arg)
 
                 // ==========================================
                 // PAYLOAD VERIFICATION
-                // ATE mode:        PRBS-only (no VMC transform).
-                // Unit test mode:  dispatch by per-VL-ID VMC payload_mode —
-                //                  legacy flows use SplitMix64 + CRC32C + PRBS,
-                //                  pure-PRBS cross flows skip SplitMix/CRC.
+                // Unit test: SplitMix64 + CRC32C + PRBS
+                // ATE mode: PRBS-only (no VMC transform)
                 // ==========================================
                 uint8_t *payload_base = pkt + payload_off;
                 uint64_t off = (seq * (uint64_t)NUM_PRBS_BYTES) % (uint64_t)PRBS_CACHE_SIZE;
                 uint8_t *prbs_exp = prbs_cache_ext + off;
 
-#if STATS_MODE_VMC
-                uint16_t pkt_vmc_port = (vl_id <= MAX_VL_ID)
-                                            ? vl_id_to_vmc_port[vl_id]
-                                            : (uint16_t)VMC_VL_ID_INVALID;
-                if (pkt_gap_loss > 0 && pkt_vmc_port != VMC_VL_ID_INVALID) {
-                    local_vmc[pkt_vmc_port].lost += pkt_gap_loss;
-                }
-#endif
-                uint8_t payload_mode;
-                if (g_ate_mode_active) {
-                    payload_mode = VMC_PAYLOAD_PURE_PRBS;
-                }
-#if STATS_MODE_VMC
-                else if (pkt_vmc_port != VMC_VL_ID_INVALID) {
-                    payload_mode = vmc_port_map[pkt_vmc_port].payload_mode;
-                }
-#endif
-                else {
-                    payload_mode = VMC_PAYLOAD_SPLITMIX_CRC;
-                }
-
-                if (payload_mode == VMC_PAYLOAD_SPLITMIX_CRC) {
+                if (!g_ate_mode_active) {
                     // ==========================================
                     // UNIT TEST MODE: SplitMix64 + CRC32C + PRBS
                     // ==========================================
@@ -1756,12 +1627,6 @@ int rx_worker(void *arg)
 
                     if (likely(crc_ok && sm_ok && prbs_ok)) {
                         local_good++;
-#if STATS_MODE_VMC
-                        if (pkt_vmc_port != VMC_VL_ID_INVALID) {
-                            local_vmc[pkt_vmc_port].rx++;
-                            local_vmc[pkt_vmc_port].good++;
-                        }
-#endif
                         if (unlikely(!first_good)) {
                             printf("✓ GOOD: Port %u Q%u VL-ID %u Seq %lu\n",
                                    params->port_id, params->queue_id, vl_id, seq);
@@ -1810,21 +1675,10 @@ int rx_worker(void *arg)
                             }
                         }
                         local_bits += berr;
-#if STATS_MODE_VMC
-                        if (pkt_vmc_port != VMC_VL_ID_INVALID) {
-                            local_vmc[pkt_vmc_port].rx++;
-                            local_vmc[pkt_vmc_port].bad++;
-                            if (!sm_ok) local_vmc[pkt_vmc_port].sm_fail++;
-                            if (!crc_ok) local_vmc[pkt_vmc_port].crc_fail++;
-                            local_vmc[pkt_vmc_port].bit_errors += berr;
-                        }
-#endif
                     }
                 } else {
                     // ==========================================
-                    // PURE PRBS path
-                    //   - ATE mode (all flows), or
-                    //   - Unit test pure-PRBS cross flow (no VMC transform).
+                    // ATE MODE: PRBS-only verification
                     // ==========================================
                     uint8_t *recv = payload_base + SEQ_BYTES;
                     uint8_t *exp = prbs_exp;
@@ -1832,12 +1686,6 @@ int rx_worker(void *arg)
 
                     if (likely(diff == 0)) {
                         local_good++;
-#if STATS_MODE_VMC
-                        if (pkt_vmc_port != VMC_VL_ID_INVALID) {
-                            local_vmc[pkt_vmc_port].rx++;
-                            local_vmc[pkt_vmc_port].good++;
-                        }
-#endif
                         if (unlikely(!first_good)) {
                             printf("✓ GOOD: Port %u Q%u VL-ID %u Seq %lu\n",
                                    params->port_id, params->queue_id, vl_id, seq);
@@ -1864,13 +1712,6 @@ int rx_worker(void *arg)
                                 berr += __builtin_popcount(r8[k] ^ e8[k]);
                         }
                         local_bits += berr;
-#if STATS_MODE_VMC
-                        if (pkt_vmc_port != VMC_VL_ID_INVALID) {
-                            local_vmc[pkt_vmc_port].rx++;
-                            local_vmc[pkt_vmc_port].bad++;
-                            local_vmc[pkt_vmc_port].bit_errors += berr;
-                        }
-#endif
                     }
                 }
             }
@@ -1894,18 +1735,18 @@ int rx_worker(void *arg)
                 rte_atomic64_add(&rx_stats_per_port[params->port_id].external_pkts, local_external);
 
 #if STATS_MODE_VMC
-                // VMC per-port payload verification stats (per-VL-ID dispatch)
-                for (uint16_t vi = 0; vi < VMC_PORT_COUNT; vi++) {
-                    struct vmc_local_accum *a = &local_vmc[vi];
-                    if (a->rx == 0 && a->lost == 0) continue;
-                    rte_atomic64_add(&vmc_stats[vi].total_rx_pkts, a->rx);
-                    rte_atomic64_add(&vmc_stats[vi].good_pkts, a->good);
-                    rte_atomic64_add(&vmc_stats[vi].bad_pkts, a->bad);
-                    rte_atomic64_add(&vmc_stats[vi].splitmix_fail, a->sm_fail);
-                    rte_atomic64_add(&vmc_stats[vi].crc32_fail, a->crc_fail);
-                    rte_atomic64_add(&vmc_stats[vi].bit_errors, a->bit_errors);
-                    rte_atomic64_add(&vmc_stats[vi].lost_pkts, a->lost);
-                    memset(a, 0, sizeof(*a));
+                // VMC per-port payload verification stats
+                if (my_vmc_port != VMC_VLAN_INVALID) {
+                    rte_atomic64_add(&vmc_stats[my_vmc_port].total_rx_pkts, local_rx);
+                    rte_atomic64_add(&vmc_stats[my_vmc_port].good_pkts, local_good);
+                    rte_atomic64_add(&vmc_stats[my_vmc_port].bad_pkts, local_bad);
+                    rte_atomic64_add(&vmc_stats[my_vmc_port].splitmix_fail, local_sm_fail);
+                    rte_atomic64_add(&vmc_stats[my_vmc_port].crc32_fail, local_crc_fail);
+                    rte_atomic64_add(&vmc_stats[my_vmc_port].bit_errors, local_bits);
+                    rte_atomic64_add(&vmc_stats[my_vmc_port].lost_pkts, local_lost);
+                    rte_atomic64_add(&vmc_stats[my_vmc_port].out_of_order_pkts, local_ooo);
+                    rte_atomic64_add(&vmc_stats[my_vmc_port].duplicate_pkts, local_dup);
+                    rte_atomic64_add(&vmc_stats[my_vmc_port].short_pkts, local_short);
                 }
 #endif
                 local_rx = local_good = local_bad = local_bits = 0;
@@ -1929,52 +1770,41 @@ int rx_worker(void *arg)
         rte_atomic64_add(&rx_stats_per_port[params->port_id].external_pkts, local_external);
 
 #if STATS_MODE_VMC
-        for (uint16_t vi = 0; vi < VMC_PORT_COUNT; vi++) {
-            struct vmc_local_accum *a = &local_vmc[vi];
-            if (a->rx == 0 && a->lost == 0) continue;
-            rte_atomic64_add(&vmc_stats[vi].total_rx_pkts, a->rx);
-            rte_atomic64_add(&vmc_stats[vi].good_pkts, a->good);
-            rte_atomic64_add(&vmc_stats[vi].bad_pkts, a->bad);
-            rte_atomic64_add(&vmc_stats[vi].splitmix_fail, a->sm_fail);
-            rte_atomic64_add(&vmc_stats[vi].crc32_fail, a->crc_fail);
-            rte_atomic64_add(&vmc_stats[vi].bit_errors, a->bit_errors);
-            rte_atomic64_add(&vmc_stats[vi].lost_pkts, a->lost);
+        if (my_vmc_port != VMC_VLAN_INVALID) {
+            rte_atomic64_add(&vmc_stats[my_vmc_port].total_rx_pkts, local_rx);
+            rte_atomic64_add(&vmc_stats[my_vmc_port].good_pkts, local_good);
+            rte_atomic64_add(&vmc_stats[my_vmc_port].bad_pkts, local_bad);
+            rte_atomic64_add(&vmc_stats[my_vmc_port].splitmix_fail, local_sm_fail);
+            rte_atomic64_add(&vmc_stats[my_vmc_port].crc32_fail, local_crc_fail);
+            rte_atomic64_add(&vmc_stats[my_vmc_port].bit_errors, local_bits);
+            rte_atomic64_add(&vmc_stats[my_vmc_port].lost_pkts, local_lost);
+            rte_atomic64_add(&vmc_stats[my_vmc_port].out_of_order_pkts, local_ooo);
+            rte_atomic64_add(&vmc_stats[my_vmc_port].duplicate_pkts, local_dup);
+            rte_atomic64_add(&vmc_stats[my_vmc_port].short_pkts, local_short);
         }
 #endif
     }
 
     // ==========================================
-    // CALCULATE LOST PACKETS (watermark-based, shutdown reconciliation)
+    // CALCULATE LOST PACKETS (watermark-based)
     // Lost = (max_seq + 1) - pkt_count for each VL-ID
-    //
-    // Real-time gap detection already populates vmc_stats[].lost_pkts per VMC
-    // during the RX loop, so we don't re-add here (that would double count).
-    // Instead we reconcile: if the watermark disagrees with the live counter
-    // (e.g. due to reorder over-count at real time, or missed gap at the tail
-    // of the run), overwrite with the watermark value — it's the accurate
-    // total. Port-wide rx_stats lost_pkts still gets the watermark added.
     // ==========================================
 #if STATS_MODE_VMC
+    // VMC mode: Each queue calculates lost for its own VL-ID range
+    // (With flow steering, each queue = 1 VLAN = 1 VMC port, ranges do not overlap)
     {
-        uint64_t queue_lost_total = 0;
-        for (uint16_t vi = 0; vi < VMC_PORT_COUNT; vi++) {
-            const struct vmc_port_map_entry *e = &vmc_port_map[vi];
-            if (e->tx_server_port != params->port_id ||
-                e->tx_server_queue != params->queue_id) {
-                continue;
-            }
+        uint64_t queue_lost = 0;
+        uint16_t vl_start = get_rx_vl_id_range_start(params->port_id, params->queue_id);
+        uint16_t vl_end = get_rx_vl_id_range_end(params->port_id, params->queue_id);
 
-            uint64_t vmc_lost = 0;
-            uint32_t vl_start = e->vl_id_start;
-            uint32_t vl_end = vl_start + e->vl_id_count;
-            for (uint32_t vl = vl_start; vl < vl_end && vl <= MAX_VL_ID; vl++)
+        for (uint16_t vl = vl_start; vl < vl_end && vl <= MAX_VL_ID; vl++)
+        {
+            struct vl_sequence_tracker *seq_tracker = &vl_tracker->vl_trackers[vl];
+            if (__atomic_load_n(&seq_tracker->initialized, __ATOMIC_ACQUIRE))
             {
-                struct vl_sequence_tracker *seq_tracker = &vl_tracker->vl_trackers[vl];
-                if (!__atomic_load_n(&seq_tracker->initialized, __ATOMIC_ACQUIRE))
-                    continue;
-
                 uint64_t max_seq = __atomic_load_n(&seq_tracker->max_seq, __ATOMIC_ACQUIRE);
                 uint64_t pkt_count = __atomic_load_n(&seq_tracker->pkt_count, __ATOMIC_ACQUIRE);
+
 #if TOKEN_BUCKET_TX_ENABLED
                 uint64_t min_seq = __atomic_load_n(&seq_tracker->min_seq, __ATOMIC_ACQUIRE);
                 uint64_t expected_count = max_seq - min_seq + 1;
@@ -1982,22 +1812,22 @@ int rx_worker(void *arg)
                 uint64_t expected_count = max_seq + 1;
 #endif
                 if (expected_count > pkt_count)
-                    vmc_lost += (expected_count - pkt_count);
-            }
-
-            // Reconcile: replace the real-time (possibly reorder-inflated)
-            // value with the accurate watermark total.
-            rte_atomic64_set(&vmc_stats[vi].lost_pkts, (int64_t)vmc_lost);
-            queue_lost_total += vmc_lost;
-            if (vmc_lost > 0) {
-                printf("RX Worker Port %u Q%u (VMC %u): %lu lost packets (VL-ID %u-%u)\n",
-                       params->port_id, params->queue_id, vi,
-                       vmc_lost, vl_start, vl_end - 1);
+                {
+                    queue_lost += (expected_count - pkt_count);
+                }
             }
         }
 
-        if (queue_lost_total > 0) {
-            rte_atomic64_add(&rx_stats_per_port[params->port_id].lost_pkts, queue_lost_total);
+        if (queue_lost > 0)
+        {
+            rte_atomic64_add(&rx_stats_per_port[params->port_id].lost_pkts, queue_lost);
+            if (my_vmc_port != VMC_VLAN_INVALID) {
+                rte_atomic64_add(&vmc_stats[my_vmc_port].lost_pkts, queue_lost);
+            }
+            printf("RX Worker Port %u Q%u (VMC %u): %lu lost packets (VL-ID %u-%u)\n",
+                   params->port_id, params->queue_id,
+                   my_vmc_port != VMC_VLAN_INVALID ? my_vmc_port : 0xFF,
+                   queue_lost, vl_start, vl_end - 1);
         }
     }
 #else
@@ -2160,43 +1990,7 @@ int start_txrx_workers(struct ports_config *ports_config, volatile bool *stop_fl
             }
 
             double port_target_gbps = TARGET_GBPS;
-
-            // Dual-lane pacing: split this queue's VL-IDs into a loopback lane
-            // (SPLITMIX_CRC VMCs) at TARGET_GBPS/NUM_TX_CORES and a cross lane
-            // (PURE_PRBS VMCs) at CROSS_TARGET_GBPS per cross flow. Either lane
-            // may be empty (pure loopback or pure cross queues).
-            //
-            // NOTE: on the server TX side we match by rx_server_{port,queue}
-            // (VMC's point of view: server TX == VMC RX). tx_server_* refers
-            // to the server's RX side and must not be used here.
-            uint16_t lb_vl_start = 0, lb_vl_count = 0;
-            uint16_t cr_vl_start = 0, cr_vl_count = 0;
-            double   lb_gbps = 0.0, cr_gbps = 0.0;
-#if STATS_MODE_VMC
-            for (int vi = 0; vi < VMC_PORT_COUNT; vi++) {
-                if (vmc_port_map[vi].rx_server_port != port_id ||
-                    vmc_port_map[vi].rx_server_queue != q) continue;
-                if (vmc_port_map[vi].payload_mode == VMC_PAYLOAD_SPLITMIX_CRC) {
-                    if (lb_vl_count == 0) lb_vl_start = vmc_port_map[vi].tx_vl_id_start;
-                    lb_vl_count += vmc_port_map[vi].vl_id_count;
-                } else {
-                    if (cr_vl_count == 0) cr_vl_start = vmc_port_map[vi].tx_vl_id_start;
-                    cr_vl_count += vmc_port_map[vi].vl_id_count;
-                }
-            }
-            if (lb_vl_count > 0) lb_gbps = port_target_gbps / (double)NUM_TX_CORES;
-            if (cr_vl_count > 0) cr_gbps = CROSS_TARGET_GBPS;
-#endif
-            double this_queue_gbps = lb_gbps + cr_gbps;
-            if (this_queue_gbps <= 0.0)
-                this_queue_gbps = port_target_gbps / (double)NUM_TX_CORES;
-            init_rate_limiter(&tx_params[tx_param_idx].limiter, this_queue_gbps, 1);
-            tx_params[tx_param_idx].loopback_vl_start = lb_vl_start;
-            tx_params[tx_param_idx].loopback_vl_count = lb_vl_count;
-            tx_params[tx_param_idx].loopback_gbps     = lb_gbps;
-            tx_params[tx_param_idx].cross_vl_start    = cr_vl_start;
-            tx_params[tx_param_idx].cross_vl_count    = cr_vl_count;
-            tx_params[tx_param_idx].cross_gbps        = cr_gbps;
+            init_rate_limiter(&tx_params[tx_param_idx].limiter, port_target_gbps, NUM_TX_CORES);
 
             uint16_t tx_vlan = get_tx_vlan_for_queue(port_id, q);
 
@@ -2238,13 +2032,10 @@ int start_txrx_workers(struct ports_config *ports_config, volatile bool *stop_fl
             tx_params[tx_param_idx].pkt_config.dst_port = DEFAULT_DST_PORT;
             tx_params[tx_param_idx].pkt_config.ttl = DEFAULT_TTL;
 
-            printf("  TX Queue %u -> Lcore %2u -> VLAN %u, VL RANGE [%u..%u) "
-                   "LoopbackLane=[%u..%u)=%.4fGbps CrossLane=[%u..%u)=%.4fGbps Total=%.4fGbps\n",
+            printf("  TX Queue %u -> Lcore %2u -> VLAN %u, VL RANGE [%u..%u) Rate: %.1f Gbps\n",
                    q, lcore_id, tx_vlan,
                    get_tx_vl_id_range_start(port_id, q), get_tx_vl_id_range_end(port_id, q),
-                   lb_vl_start, lb_vl_start + lb_vl_count, lb_gbps,
-                   cr_vl_start, cr_vl_start + cr_vl_count, cr_gbps,
-                   this_queue_gbps);
+                   port_target_gbps);
 
             int ret = rte_eal_remote_launch(tx_worker,
                                             &tx_params[tx_param_idx],

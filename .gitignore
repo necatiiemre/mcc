@@ -1,2 +1,7 @@
 # CMake build directories
 **/build/
+
+# DPDK app build artifacts
+dpdk_vmc/dpdk_app
+dpdk_vmc/dpdk_app-debug
+dpdk_vmc/dpdk_app-static
