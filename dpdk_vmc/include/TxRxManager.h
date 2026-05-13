@@ -85,14 +85,8 @@ extern struct vmc_port_stats vmc_stats[VMC_PORT_COUNT];
 // VMC port mapping table (loaded from config at runtime)
 extern struct vmc_port_map_entry vmc_port_map[VMC_PORT_COUNT];
 
-// VLAN → VMC port fast lookup table (legacy; ambiguous when multiple flows
-// share a VLAN — use vl_id_to_vmc_port[] for per-packet dispatch).
+// VLAN → VMC port fast lookup table
 extern uint8_t vlan_to_vmc_port[VMC_VLAN_LOOKUP_SIZE];
-
-// VL-ID → VMC port lookup (indexed by VL-ID, sized MAX_VL_ID+1).
-// Each active VL-ID maps to exactly one VMC flow; VMC_VL_ID_INVALID marks
-// unassigned slots. Built by init_vmc_port_map() from VMC_PORT_MAP_INIT.
-extern uint16_t vl_id_to_vmc_port[MAX_VL_ID + 1];
 
 /**
  * Initialize VMC port mapping and VLAN lookup table
@@ -178,17 +172,6 @@ struct tx_worker_params
 
     // Phase distribution: total active port count (runtime)
     uint16_t nb_ports;
-
-    // Dual-lane pacing (VMC mode): when a queue hosts both a normal loopback
-    // flow and a cross overlay flow, each lane gets its own rate. Either lane
-    // may have count=0 (unused). If both are 0, tx_worker falls back to the
-    // legacy single-lane round-robin driven by `limiter`.
-    uint16_t loopback_vl_start;
-    uint16_t loopback_vl_count;
-    double   loopback_gbps;
-    uint16_t cross_vl_start;
-    uint16_t cross_vl_count;
-    double   cross_gbps;
 };
 
 /**
@@ -209,19 +192,6 @@ struct rx_worker_params
  * Initialize VLAN configuration from config.h
  */
 void init_vlan_config(void);
-
-/**
- * Read the current TX sequence counter for a (port, VL-ID). Matches the
- * number of packets committed on TX for that VL-ID; used by stats display
- * to split per-VMC TX counters when a queue carries multiple flows.
- */
-uint64_t get_tx_vl_sequence(uint16_t port_id, uint16_t vl_id);
-
-/**
- * Zero every TX VL-ID sequence counter. Call at warm-up → test transition
- * so shared-queue VMC RX (Σ tx_vl_sequence) does not include warm-up commits.
- */
-void reset_tx_vl_sequences(void);
 
 /**
  * Get TX VLAN ID for a specific port and queue

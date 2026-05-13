@@ -7,7 +7,6 @@
 #include <rte_atomic.h>
 
 #include "Config.h"
-#include "Packet.h"       // for PACKET_SIZE (byte approximation for per-VMC stats)
 #include "TxRxManager.h"  // for rx_stats_per_port
 #include "AteMode.h"
 
@@ -23,10 +22,6 @@ static inline double to_gbps(uint64_t bytes) {
     return (bytes * 8.0) / 1e9;
 }
 
-#if STATS_MODE_VMC
-static void reset_vmc_prev_bytes(void);
-#endif
-
 void helper_reset_stats(const struct ports_config *ports_config,
                         uint64_t prev_tx_bytes[], uint64_t prev_rx_bytes[])
 {
@@ -38,16 +33,11 @@ void helper_reset_stats(const struct ports_config *ports_config,
         prev_rx_bytes[port_id] = 0;
     }
 
-    // Reset RX validation statistics (PRBS) + per-VL sequence trackers
+    // Reset RX validation statistics (PRBS)
     init_rx_stats();
-
-    // Reset TX VL-ID commit counters so shared-queue VMC RX
-    // (Σ tx_vl_sequence) does not carry warm-up residue into the test window.
-    reset_tx_vl_sequences();
 
 #if STATS_MODE_VMC
     init_vmc_stats();
-    reset_vmc_prev_bytes();
 #endif
 }
 
@@ -64,44 +54,6 @@ void helper_reset_stats(const struct ports_config *ports_config,
 static uint64_t vmc_prev_tx_bytes[VMC_PORT_COUNT];
 static uint64_t vmc_prev_rx_bytes[VMC_PORT_COUNT];
 
-// Zero the per-VMC prev-byte baselines. Invoked from helper_reset_stats at
-// warm-up → test transition so the first test-window Gbps delta is computed
-// against zero, not the warm-up byte total.
-static void reset_vmc_prev_bytes(void)
-{
-    for (uint16_t i = 0; i < VMC_PORT_COUNT; i++) {
-        vmc_prev_tx_bytes[i] = 0;
-        vmc_prev_rx_bytes[i] = 0;
-    }
-}
-
-// Count VMC flows that share the same server RX (queue) — used to decide
-// whether the HW per-queue counter is dedicated to this VMC (single flow)
-// or must be split via the software per-VL-ID counters (shared queue).
-static uint16_t vmc_flows_on_srv_rx(uint16_t srv_rx_port, uint16_t srv_rx_queue)
-{
-    uint16_t n = 0;
-    for (uint16_t i = 0; i < VMC_PORT_COUNT; i++) {
-        if (vmc_port_map[i].tx_server_port == srv_rx_port &&
-            vmc_port_map[i].tx_server_queue == srv_rx_queue) {
-            n++;
-        }
-    }
-    return n;
-}
-
-static uint16_t vmc_flows_on_srv_tx(uint16_t srv_tx_port, uint16_t srv_tx_queue)
-{
-    uint16_t n = 0;
-    for (uint16_t i = 0; i < VMC_PORT_COUNT; i++) {
-        if (vmc_port_map[i].rx_server_port == srv_tx_port &&
-            vmc_port_map[i].rx_server_queue == srv_tx_queue) {
-            n++;
-        }
-    }
-    return n;
-}
-
 static void print_vmc_table_group(const uint16_t *indices, uint16_t count,
                                   const struct rte_eth_stats port_hw_stats[])
 {
@@ -115,40 +67,17 @@ static void print_vmc_table_group(const uint16_t *indices, uint16_t count,
         uint16_t vmc = indices[i];
         const struct vmc_port_map_entry *entry = &vmc_port_map[vmc];
 
+        // VMC TX (VMC→Server) = Server RX = HW q_ipackets[queue] on tx_server_port
         uint16_t srv_rx_port = entry->tx_server_port;
         uint16_t srv_rx_queue = entry->tx_server_queue;
+        uint64_t vmc_tx_pkts = port_hw_stats[srv_rx_port].q_ipackets[srv_rx_queue];
+        uint64_t vmc_tx_bytes = port_hw_stats[srv_rx_port].q_ibytes[srv_rx_queue];
+
+        // VMC RX (Server→VMC) = Server TX = HW q_opackets[queue] on rx_server_port
         uint16_t srv_tx_port = entry->rx_server_port;
         uint16_t srv_tx_queue = entry->rx_server_queue;
-
-        uint64_t vmc_tx_pkts, vmc_tx_bytes;
-        uint64_t vmc_rx_pkts, vmc_rx_bytes;
-
-        // VMC TX (VMC→Server, server RX side).
-        // Use HW q_ipackets/q_ibytes when this VMC is the only flow on that
-        // RX queue; otherwise split via software per-VMC rx counters.
-        if (vmc_flows_on_srv_rx(srv_rx_port, srv_rx_queue) == 1) {
-            vmc_tx_pkts = port_hw_stats[srv_rx_port].q_ipackets[srv_rx_queue];
-            vmc_tx_bytes = port_hw_stats[srv_rx_port].q_ibytes[srv_rx_queue];
-        } else {
-            vmc_tx_pkts = rte_atomic64_read(&vmc_stats[vmc].total_rx_pkts);
-            vmc_tx_bytes = vmc_tx_pkts * (uint64_t)PACKET_SIZE;
-        }
-
-        // VMC RX (Server→VMC, server TX side).
-        // Use HW q_opackets/q_obytes for dedicated queues; otherwise sum the
-        // per-VL-ID TX sequence counters over this VMC's TX range.
-        if (vmc_flows_on_srv_tx(srv_tx_port, srv_tx_queue) == 1) {
-            vmc_rx_pkts = port_hw_stats[srv_tx_port].q_opackets[srv_tx_queue];
-            vmc_rx_bytes = port_hw_stats[srv_tx_port].q_obytes[srv_tx_queue];
-        } else {
-            uint64_t sum = 0;
-            for (uint16_t v = 0; v < entry->vl_id_count; v++) {
-                sum += get_tx_vl_sequence(srv_tx_port,
-                                          (uint16_t)(entry->tx_vl_id_start + v));
-            }
-            vmc_rx_pkts = sum;
-            vmc_rx_bytes = sum * (uint64_t)PACKET_SIZE;
-        }
+        uint64_t vmc_rx_pkts = port_hw_stats[srv_tx_port].q_opackets[srv_tx_queue];
+        uint64_t vmc_rx_bytes = port_hw_stats[srv_tx_port].q_obytes[srv_tx_queue];
 
         // Gbps delta calculation
         uint64_t tx_delta = vmc_tx_bytes - vmc_prev_tx_bytes[vmc];
@@ -231,8 +160,8 @@ static void helper_print_vmc_stats(const struct ports_config *ports_config,
     printf("\n  === FCPU (Server Port 2: J4-3,J4-4 | Port 1: J7-1..J7-4 | Port 0: J6-1) ===\n");
     print_vmc_table_group(fcpu_vmc_indices, FCPU_COUNT, port_hw_stats);
 
-    // Table 3: Cross (pure-PRBS, no SplitMix/CRC)
-    printf("\n  === CROSS (Pure PRBS: J6-1↔J6-2, J6-3↔J6-4) ===\n");
+    // Table 3: Cross
+    printf("\n  === CROSS (Port 0: J6-2 TX->J6-4 RX, J6-4 TX->J6-2 RX) ===\n");
     print_vmc_table_group(cross_vmc_indices, CROSS_COUNT, port_hw_stats);
 
     // Warnings

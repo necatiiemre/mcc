@@ -8,10 +8,7 @@ INCDIR = include
 
 NUM_TX_CORES ?= 4
 NUM_RX_CORES ?= 4
-TARGET_GBPS ?= 0.092
-# Per-cross-flow target rate in Gbps (applies only to the Port 0 cross VMCs:
-# J1>J2, J2>J1, J3>J4, J4>J3). Loopback flows are unaffected.
-CROSS_TARGET_GBPS ?= 0.94
+TARGET_GBPS ?= 0.072
 USE_VLAN ?=1
 
 # VMC port-based statistics mode (1=VMC 34-port table, 0=Server 8-port table)
@@ -21,14 +18,14 @@ STATS_MODE_VMC ?= 1
 ATE_ROOT := $(shell pwd)/AteCumulus/AteTestMode
 
 # Compiler flags
-CFLAGS = -O3 -march=native -flto -ffast-math -funroll-loops -Wextra -I$(INCDIR) -I$(INCDIR)/health_monitor -I$(SRCDIR) -DNUM_TX_CORES=$(NUM_TX_CORES) -DNUM_RX_CORES=$(NUM_RX_CORES) -DUSE_VLAN=$(USE_VLAN) -DTARGET_GBPS=$(TARGET_GBPS) -DCROSS_TARGET_GBPS=$(CROSS_TARGET_GBPS) -DSTATS_MODE_VMC=$(STATS_MODE_VMC) -DATE_ROOT=\"$(ATE_ROOT)\"
-DEBUG_CFLAGS = -g -O3 -DDEBUG -march=native -Wall -Wextra -I$(INCDIR) -I$(INCDIR)/health_monitor -I$(SRCDIR) -DATE_ROOT=\"$(ATE_ROOT)\"
+CFLAGS = -O3 -march=native -flto -ffast-math -funroll-loops -Wextra -I$(INCDIR) -I$(INCDIR)/health_monitor -I$(INCDIR)/ptp -I$(SRCDIR) -DNUM_TX_CORES=$(NUM_TX_CORES) -DNUM_RX_CORES=$(NUM_RX_CORES) -DUSE_VLAN=$(USE_VLAN) -DTARGET_GBPS=$(TARGET_GBPS) -DSTATS_MODE_VMC=$(STATS_MODE_VMC) -DATE_ROOT=\"$(ATE_ROOT)\"
+DEBUG_CFLAGS = -g -O3 -DDEBUG -march=native -Wall -Wextra -I$(INCDIR) -I$(INCDIR)/health_monitor -I$(INCDIR)/ptp -I$(SRCDIR) -DATE_ROOT=\"$(ATE_ROOT)\"
 
 # Additional libraries (pthread for threading)
 EXTRA_LIBS = -lpthread
 
 # Source files
-SOURCES = $(wildcard $(SRCDIR)/*.c) $(wildcard $(SRCDIR)/health_monitor/*.c)
+SOURCES = $(wildcard $(SRCDIR)/*.c) $(wildcard $(SRCDIR)/health_monitor/*.c) $(wildcard $(SRCDIR)/ptp/*.c)
 
 # DPDK flags
 DPDK_FLAGS = $(shell pkg-config --cflags --libs libdpdk)
