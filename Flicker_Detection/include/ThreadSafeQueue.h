@@ -3,6 +3,7 @@
 #include <queue>
 #include <mutex>
 #include <condition_variable>
+#include <atomic>
 #include <utility>
 
 template <typename T>
@@ -12,6 +13,7 @@ private:
     mutable std::mutex mtx;
     std::queue<T> data_queue;
     std::condition_variable cv;
+    std::atomic<bool> shutdown_flag{false};
 
 public:
     void push(T new_value)
@@ -24,7 +26,9 @@ public:
     bool wait_and_pop(T &value)
     {
         std::unique_lock<std::mutex> lock(mtx);
-        cv.wait(lock, [this] { return !data_queue.empty(); });
+        cv.wait(lock, [this] { return !data_queue.empty() || shutdown_flag.load(); });
+        if (data_queue.empty())
+            return false;
         value = std::move(data_queue.front());
         data_queue.pop();
         return true;
@@ -48,6 +52,12 @@ public:
 
     void notify_all()
     {
+        cv.notify_all();
+    }
+
+    void shutdown()
+    {
+        shutdown_flag.store(true);
         cv.notify_all();
     }
 };

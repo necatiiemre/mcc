@@ -33,7 +33,43 @@ bool FlickerDetectionRunner::isRunning() const
     return ::kill(m_pid, 0) == 0;
 }
 
-bool FlickerDetectionRunner::startForCmc(const std::string& log_path)
+bool FlickerDetectionRunner::startForCmc(const std::string& log_path,
+                                         const std::string& output_dir)
+{
+    UnitParams p{
+        "CMC",
+        FlickerDetectionConfig::Cmc::MODE,
+        FlickerDetectionConfig::Cmc::CARD_1,
+        FlickerDetectionConfig::Cmc::CHANNEL_1,
+        FlickerDetectionConfig::Cmc::USE_SECOND_CARD,
+        FlickerDetectionConfig::Cmc::CARD_2,
+        FlickerDetectionConfig::Cmc::CHANNEL_2,
+        FlickerDetectionConfig::Cmc::DVI_CHANNEL,
+        FlickerDetectionConfig::Cmc::LOOPBACK
+    };
+    return startWithParams(p, log_path, output_dir);
+}
+
+bool FlickerDetectionRunner::startForMmc(const std::string& log_path,
+                                         const std::string& output_dir)
+{
+    UnitParams p{
+        "MMC",
+        FlickerDetectionConfig::Mmc::MODE,
+        FlickerDetectionConfig::Mmc::CARD_1,
+        FlickerDetectionConfig::Mmc::CHANNEL_1,
+        FlickerDetectionConfig::Mmc::USE_SECOND_CARD,
+        FlickerDetectionConfig::Mmc::CARD_2,
+        FlickerDetectionConfig::Mmc::CHANNEL_2,
+        FlickerDetectionConfig::Mmc::DVI_CHANNEL,
+        FlickerDetectionConfig::Mmc::LOOPBACK
+    };
+    return startWithParams(p, log_path, output_dir);
+}
+
+bool FlickerDetectionRunner::startWithParams(const UnitParams& p,
+                                             const std::string& log_path,
+                                             const std::string& output_dir)
 {
     if (isRunning())
     {
@@ -53,54 +89,57 @@ bool FlickerDetectionRunner::startForCmc(const std::string& log_path)
         return false;
     }
 
-    // Build argv from constexpr CMC config
     std::vector<std::string> args;
     args.push_back(binary);
     args.push_back("--mode");
-    args.push_back(std::to_string(FlickerDetectionConfig::Cmc::MODE));
+    args.push_back(std::to_string(p.mode));
 
-    if (FlickerDetectionConfig::Cmc::MODE == 1
-        || FlickerDetectionConfig::Cmc::MODE == 3)
+    if (p.mode == 1 || p.mode == 3)
     {
         args.push_back("--card1");
-        args.push_back(std::to_string(FlickerDetectionConfig::Cmc::CARD_1));
+        args.push_back(std::to_string(p.card1));
         args.push_back("--channel1");
-        args.push_back(std::to_string(FlickerDetectionConfig::Cmc::CHANNEL_1));
+        args.push_back(std::to_string(p.channel1));
 
-        if (FlickerDetectionConfig::Cmc::USE_SECOND_CARD)
+        if (p.use_second_card)
         {
             args.push_back("--card2");
-            args.push_back(std::to_string(FlickerDetectionConfig::Cmc::CARD_2));
+            args.push_back(std::to_string(p.card2));
             args.push_back("--channel2");
-            args.push_back(std::to_string(FlickerDetectionConfig::Cmc::CHANNEL_2));
+            args.push_back(std::to_string(p.channel2));
         }
 
-        if (FlickerDetectionConfig::Cmc::LOOPBACK)
+        if (p.loopback)
             args.push_back("--loopback");
     }
 
-    if (FlickerDetectionConfig::Cmc::MODE == 2
-        || FlickerDetectionConfig::Cmc::MODE == 3)
+    if (p.mode == 2 || p.mode == 3)
     {
         args.push_back("--dvi-channel");
-        args.push_back(std::to_string(FlickerDetectionConfig::Cmc::DVI_CHANNEL));
+        args.push_back(std::to_string(p.dvi_channel));
+    }
+
+    if (!output_dir.empty())
+    {
+        args.push_back("--output-dir");
+        args.push_back(output_dir);
     }
 
     args.push_back("--no-commands");
 
-    // Convert to char* array for execv
     std::vector<char*> argv;
     argv.reserve(args.size() + 1);
     for (auto& a : args) argv.push_back(const_cast<char*>(a.c_str()));
     argv.push_back(nullptr);
 
-    // Ensure log directory exists
     try {
         std::filesystem::create_directories(
             std::filesystem::path(log_path).parent_path());
+        if (!output_dir.empty())
+            std::filesystem::create_directories(output_dir);
     } catch (const std::exception& e) {
         ErrorPrinter::warn("FLICKER",
-            std::string("Could not create log dir: ") + e.what());
+            std::string("Could not create flicker dirs: ") + e.what());
     }
 
     pid_t pid = ::fork();
@@ -113,7 +152,6 @@ bool FlickerDetectionRunner::startForCmc(const std::string& log_path)
 
     if (pid == 0)
     {
-        // Child: redirect stdout+stderr to log file, detach stdin from parent
         int log_fd = ::open(log_path.c_str(),
                             O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (log_fd >= 0)
@@ -129,18 +167,18 @@ bool FlickerDetectionRunner::startForCmc(const std::string& log_path)
             ::close(devnull);
         }
 
-        // New process group so SIGTERM to the child doesn't propagate via tty
         ::setpgid(0, 0);
 
         ::execv(binary.c_str(), argv.data());
-        // exec failed
         std::cerr << "execv failed: " << std::strerror(errno) << std::endl;
         _exit(127);
     }
 
     m_pid = pid;
-    DEBUG_LOG("FLICKER: FlickerDetection started, pid=" << m_pid
-              << " log=" << log_path);
+    DEBUG_LOG("FLICKER: FlickerDetection started for " << p.label
+              << ", pid=" << m_pid
+              << " log=" << log_path
+              << " output=" << output_dir);
     return true;
 }
 

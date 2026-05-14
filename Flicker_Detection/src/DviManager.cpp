@@ -30,8 +30,8 @@ namespace
 {
     const char *dviDeviceChannel1 = "/dev/video0";
     const char *dviDeviceChannel2 = "/dev/video1";
-    const int WIDTH = 1920;
-    const int HEIGHT = 1080;
+    const int WIDTH = 1280;
+    const int HEIGHT = 1024;
     const int PIXEL_FORMAT = V4L2_PIX_FMT_YUYV;
 
     void setThreadAffinity(int coreId)
@@ -143,7 +143,7 @@ uint8_t DviManager::consumer_worker(int channelId, int core)
     rc = getCurrentTimestamp(time_stamp);
     videoFile = videoPath + "/" + time_stamp + ".avi";
 
-    FILE *ffmpeg_pipe = startFFmpegWriter(videoFile, width_1920, height_1080);
+    FILE *ffmpeg_pipe = startFFmpegWriter(videoFile, width_1280, height_1024);
 
     DviChannel &channel = (channelId == 0) ? channel_1 : channel_2;
     auto &frameQueue = *channel.frame_queue_channel;
@@ -153,6 +153,8 @@ uint8_t DviManager::consumer_worker(int channelId, int core)
 
     float prevScore = 0.0f;
     bool firstFrame = true;
+    bool fpsBelow10Active = false;
+    bool oneMinuteResetDone = false;
 
     getDeviceTemperature(channelId, channel);
     const auto start_time = std::chrono::steady_clock::now();
@@ -214,19 +216,61 @@ uint8_t DviManager::consumer_worker(int channelId, int core)
         getCurrentTimestamp(timeStr);
         float temperature = channel.temperature.load();
 
-        cv::putText(currentFrame, "Time: " + timeStr, cv::Point(10, 30),
-                    cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 255, 0), 2);
-        cv::putText(currentFrame, "FPS: " + std::to_string(channel.fps.load()), cv::Point(10, 60),
-                    cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 255, 0), 2);
-        cv::putText(currentFrame, "Frames: " + std::to_string(frameCounter), cv::Point(10, 90),
-                    cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 255, 0), 2);
-        cv::putText(currentFrame, "Errors: " + std::to_string(errorCounter), cv::Point(10, 120),
-                    cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 0, 255), 2);
+        auto elapsedSecondsTotal = std::chrono::duration_cast<std::chrono::seconds>(now - start_time).count();
+        int elapsedHours   = static_cast<int>(elapsedSecondsTotal / 3600);
+        int elapsedMinutes = static_cast<int>((elapsedSecondsTotal % 3600) / 60);
+        int elapsedSeconds = static_cast<int>(elapsedSecondsTotal % 60);
+        char elapsedBuf[32];
+        std::snprintf(elapsedBuf, sizeof(elapsedBuf), "%02d:%02d:%02d",
+                      elapsedHours, elapsedMinutes, elapsedSeconds);
+
+        int currentFps = channel.fps.load();
+        cv::Scalar fpsColor = (currentFps < 10) ? cv::Scalar(0, 0, 255) : cv::Scalar(0, 255, 0);
+
+        auto secsSinceStart = std::chrono::duration_cast<std::chrono::seconds>(now - start_time).count();
+
+        if (!oneMinuteResetDone && secsSinceStart >= 60)
+        {
+            fprintf(stderr, "[FD][DVI ch%d] elapsed 1 min, resetting frame/error counters at %s\n",
+                    channelId + 1, elapsedBuf);
+            fflush(stderr);
+            channel.frame_counter.store(0);
+            channel.error_frame_counter.store(0);
+            oneMinuteResetDone = true;
+        }
+
+        if (secsSinceStart >= 10)
+        {
+            if (currentFps < 10 && !fpsBelow10Active)
+            {
+                fprintf(stderr, "[FD][DVI ch%d] FPS dropped below 10 at %s (fps=%d)\n",
+                        channelId + 1, timeStr.c_str(), currentFps);
+                fflush(stderr);
+                fpsBelow10Active = true;
+            }
+            else if (currentFps >= 10 && fpsBelow10Active)
+            {
+                fprintf(stderr, "[FD][DVI ch%d] FPS recovered at %s (fps=%d)\n",
+                        channelId + 1, timeStr.c_str(), currentFps);
+                fflush(stderr);
+                fpsBelow10Active = false;
+            }
+        }
+        cv::putText(currentFrame, "Time: " + timeStr, cv::Point(10, 290),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.56, cv::Scalar(0, 255, 0), 2);
+        cv::putText(currentFrame, std::string("Elapsed: ") + elapsedBuf, cv::Point(10, 320),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.56, cv::Scalar(0, 255, 0), 2);
+        cv::putText(currentFrame, "FPS: " + std::to_string(currentFps), cv::Point(10, 350),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.56, fpsColor, 2);
+        cv::putText(currentFrame, "Frames: " + std::to_string(frameCounter), cv::Point(10, 380),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.56, cv::Scalar(0, 255, 0), 2);
+        cv::putText(currentFrame, "Errors: " + std::to_string(errorCounter), cv::Point(10, 410),
+                    cv::FONT_HERSHEY_SIMPLEX, 0.56, cv::Scalar(0, 0, 255), 2);
 
         int roundedTemp = static_cast<int>(std::round(temperature));
         cv::Scalar tempColor = (roundedTemp >= 85) ? cv::Scalar(0, 0, 255) : cv::Scalar(0, 255, 0);
         cv::putText(currentFrame, "Temp: " + std::to_string(roundedTemp) + " C",
-                    cv::Point(10, 150), cv::FONT_HERSHEY_SIMPLEX, 0.7,
+                    cv::Point(10, 440), cv::FONT_HERSHEY_SIMPLEX, 0.56,
                     tempColor, 2);
 
         writeFFmpegFrame(ffmpeg_pipe, currentFrame);
@@ -261,6 +305,19 @@ void DviManager::display_worker(int channelId, int coreId)
 
         if (frame && !frame->empty())
         {
+            bool visible = false;
+            try
+            {
+                visible = cv::getWindowProperty(windowName, cv::WND_PROP_VISIBLE) >= 1.0;
+            }
+            catch (const cv::Exception &)
+            {
+                visible = false;
+            }
+            if (!visible)
+            {
+                cv::namedWindow(windowName, cv::WINDOW_AUTOSIZE);
+            }
             cv::imshow(windowName, *frame);
         }
 
@@ -272,7 +329,8 @@ void DviManager::display_worker(int channelId, int coreId)
     }
 
     cv::destroyWindow(windowName);
-    cv::waitKey(10);
+    for (int i = 0; i < 10; ++i)
+        cv::waitKey(10);
     LOG_INFO("Display thread for channel " << channelId << " has stopped.");
 }
 
@@ -289,6 +347,8 @@ uint8_t DviManager::start(int channel)
 
         if ((channel == 0 || channel == 2) && !channel_1.is_running)
         {
+            channel_1.frame_queue_channel = std::make_unique<ThreadSafeQueue<std::unique_ptr<cv::Mat>>>();
+            channel_1.display_queue_channel = std::make_unique<ThreadSafeQueue<std::unique_ptr<cv::Mat>>>();
             channel_1.is_running = true;
             producerThread1 = std::thread(&DviManager::producer_worker, this, dviDeviceChannel1, 0, 12);
             consumerThread1 = std::thread(&DviManager::consumer_worker, this, 0, 12);
@@ -298,6 +358,8 @@ uint8_t DviManager::start(int channel)
 
         if ((channel == 1 || channel == 2) && !channel_2.is_running)
         {
+            channel_2.frame_queue_channel = std::make_unique<ThreadSafeQueue<std::unique_ptr<cv::Mat>>>();
+            channel_2.display_queue_channel = std::make_unique<ThreadSafeQueue<std::unique_ptr<cv::Mat>>>();
             channel_2.is_running = true;
             producerThread2 = std::thread(&DviManager::producer_worker, this, dviDeviceChannel2, 1, 14);
             consumerThread2 = std::thread(&DviManager::consumer_worker, this, 1, 14);
@@ -318,11 +380,11 @@ uint8_t DviManager::stop(int channel)
     try
     {
         cout << "Stop trigger" << endl;
-        if ((channel == 0 || channel == 2) && channel_1.is_running.load())
+        if (channel == 0 || channel == 2)
         {
             channel_1.is_running = false;
-            channel_1.frame_queue_channel->notify_all();
-            channel_1.display_queue_channel->notify_all();
+            channel_1.frame_queue_channel->shutdown();
+            channel_1.display_queue_channel->shutdown();
 
             if (producerThread1.joinable())
                 producerThread1.join();
@@ -334,11 +396,11 @@ uint8_t DviManager::stop(int channel)
             LOG_INFO("Stopped DVI Channel 1.");
         }
 
-        if ((channel == 1 || channel == 2) && channel_2.is_running.load())
+        if (channel == 1 || channel == 2)
         {
             channel_2.is_running = false;
-            channel_2.frame_queue_channel->notify_all();
-            channel_2.display_queue_channel->notify_all();
+            channel_2.frame_queue_channel->shutdown();
+            channel_2.display_queue_channel->shutdown();
 
             if (producerThread2.joinable())
                 producerThread2.join();
@@ -637,15 +699,11 @@ uint8_t DviManager::resetStatistics(int channel)
         {
             channel_1.frame_counter.store(0);
             channel_1.error_frame_counter.store(0);
-            channel_1.fps.store(0);
-            channel_1.start_time_elapsed = std::chrono::steady_clock::now();
         }
         else if (channel == 1)
         {
             channel_2.frame_counter.store(0);
             channel_2.error_frame_counter.store(0);
-            channel_2.fps.store(0);
-            channel_2.start_time_elapsed = std::chrono::steady_clock::now();
         }
         return CODE_SUCCESS;
     }

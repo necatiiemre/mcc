@@ -217,6 +217,18 @@ uint8_t DriverManager::initializeCardProperties(CardProperties &props)
 // Destructor - deallocates heap memory and releases associated resources
 DriverManager::~DriverManager()
 {
+    try
+    {
+        if (isRunning || First_Driver != 0 || Second_Driver != 0)
+        {
+            stopFlickerDetection();
+        }
+    }
+    catch (...)
+    {
+        // best effort - process is going down anyway
+    }
+
     rc = releaseResources();
     checkReturnCode(rc, "Release Resources Failed");
 }
@@ -379,43 +391,35 @@ u_int8_t DriverManager::closeCard(UINT_PTR &driver, void *mem1, void *mem2, cons
     {
         if (driver != 0)
         {
-            rc = GRTV_MemBufFree(driver, (UINT_PTR)mem1);
-            if (rc == 0)
+            if (mem1 != nullptr)
             {
-                LOG_INFO("Channel 1 cleaned Card " << cardName.c_str());
-            }
-            else
-            {
-                LOG_ERROR("Failed to free memory buffer for channel 1 of " << cardName.c_str());
-                throw std::runtime_error("Failed to free memory buffer for channel 1");
+                rc = GRTV_MemBufFree(driver, (UINT_PTR)mem1);
+                if (rc == 0)
+                    LOG_INFO("Channel 1 cleaned Card " << cardName.c_str());
+                else
+                    LOG_ERROR("Failed to free memory buffer for channel 1 of " << cardName.c_str() << " rc=" << rc);
             }
 
-            rc = GRTV_MemBufFree(driver, (UINT_PTR)mem2);
-            if (rc == 0)
+            if (mem2 != nullptr)
             {
-                LOG_INFO("Channel 2 cleaned Card " << cardName.c_str());
-            }
-            else
-            {
-                LOG_ERROR("Failed to free memory buffer for channel 2 of " << cardName.c_str());
-                throw std::runtime_error("Failed to free memory buffer for channel 2");
+                rc = GRTV_MemBufFree(driver, (UINT_PTR)mem2);
+                if (rc == 0)
+                    LOG_INFO("Channel 2 cleaned Card " << cardName.c_str());
+                else
+                    LOG_ERROR("Failed to free memory buffer for channel 2 of " << cardName.c_str() << " rc=" << rc);
             }
 
             rc = GRTV_CloseDriver(driver);
             if (rc == 0)
-            {
                 LOG_INFO("Closed card " << cardName << " driver.");
-            }
             else
-            {
                 LOG_ERROR("Failed to close driver for " << cardName << ": " << rc);
-                throw std::runtime_error("Failed to close driver");
-            }
+
             driver = 0;
         }
         else
         {
-            LOG_WARN("Card already closed" << cardName);
+            LOG_WARN("Card already closed " << cardName);
         }
         return CODE_SUCCESS;
     }
@@ -433,14 +437,24 @@ uint8_t DriverManager::closeDrivers()
 {
     try
     {
+        fprintf(stderr, "[closeDrivers] -> closeCard(First_Driver=%lu)\n", (unsigned long)First_Driver);
         rc = closeCard(First_Driver, gpMem1_1, gpMem1_2, card_1);
         checkReturnCode(rc, "Close Driver Card 1 Failed");
+        gpMem1_1 = nullptr;
+        gpMem1_2 = nullptr;
+        fprintf(stderr, "[closeDrivers] First closed\n");
+
+        fprintf(stderr, "[closeDrivers] -> closeCard(Second_Driver=%lu)\n", (unsigned long)Second_Driver);
         rc = closeCard(Second_Driver, gpMem2_1, gpMem2_2, card_2);
         checkReturnCode(rc, "Close Driver Card 2 Failed");
+        gpMem2_1 = nullptr;
+        gpMem2_2 = nullptr;
+        fprintf(stderr, "[closeDrivers] Second closed\n");
         return CODE_SUCCESS;
     }
     catch (const std::exception &e)
     {
+        fprintf(stderr, "[closeDrivers] EXC: %s\n", e.what());
         LOG_ERROR("Error closing drivers: " << e.what());
         return CODE_CLOSE_VELOCITY_DRIVER_FAILED;
     }
@@ -635,7 +649,7 @@ uint8_t DriverManager::checkCardResolution(UINT_PTR &driver, const std::string &
             int link_rate = config_mode_info.LinkRate[mode_index];
 
             // Resolution check
-            check_resolutionVelocity(width, height, link_rate, width_1280, height_1024, link_rate_6, cardName);
+            check_resolutionVelocity(width, height, link_rate, width_2560, height_1024, link_rate_6, cardName);
 
             LOG_INFO("Card " << cardName
                              << ", Mode " << mode_index
@@ -1142,12 +1156,43 @@ void DriverManager::handleCard1Channel1(UINT32 *data)
         string_stream_card1_channel_1.str("");
         string_stream_card1_channel_1.clear();
 
+        if (!driver_manager.oneMinuteResetDone_card1_ch1 && totalSeconds >= 60)
+        {
+            fprintf(stderr, "[FD][Velocity card1 ch1] elapsed 1 min, resetting frame/error counters at %s\n",
+                    timeStr.c_str());
+            fflush(stderr);
+            if (driver_manager.frameCount_card1_Ch1)        *driver_manager.frameCount_card1_Ch1 = 0;
+            if (driver_manager.errorFrameCount_card1_Ch1)   *driver_manager.errorFrameCount_card1_Ch1 = 0;
+            if (driver_manager.card1Props.frameCount_Ch1)        *driver_manager.card1Props.frameCount_Ch1 = 0;
+            if (driver_manager.card1Props.errorFrameCount_Ch1)   *driver_manager.card1Props.errorFrameCount_Ch1 = 0;
+            driver_manager.oneMinuteResetDone_card1_ch1 = true;
+        }
+
         if (totalSeconds % 2 == 0)
         {
             rc = GRTV_GetFPGAJunctionTemp(driver_manager.First_Driver, &jtemp_card1_channel1);
             auto nowfpstime = std::chrono::steady_clock::now();
             std::chrono::duration<float> elapsed_fps_time = std::chrono::duration_cast<std::chrono::seconds>(nowfpstime - driver_manager.card1_ch1_time);
             driver_manager.fps_card1_ch1 = driver_manager.counter_card1_ch1 / (elapsed_fps_time.count() + 1e-9);
+
+            if (totalSeconds >= 10)
+            {
+                int curFps = int(driver_manager.fps_card1_ch1);
+                if (curFps < 10 && !driver_manager.fpsBelow10_card1_ch1)
+                {
+                    fprintf(stderr, "[FD][Velocity card1 ch1] FPS dropped below 10 at %s (fps=%d)\n",
+                            timeStr.c_str(), curFps);
+                    fflush(stderr);
+                    driver_manager.fpsBelow10_card1_ch1 = true;
+                }
+                else if (curFps >= 10 && driver_manager.fpsBelow10_card1_ch1)
+                {
+                    fprintf(stderr, "[FD][Velocity card1 ch1] FPS recovered at %s (fps=%d)\n",
+                            timeStr.c_str(), curFps);
+                    fflush(stderr);
+                    driver_manager.fpsBelow10_card1_ch1 = false;
+                }
+            }
         }
 
         if (loopbackTestMode)
@@ -1158,7 +1203,8 @@ void DriverManager::handleCard1Channel1(UINT32 *data)
 
             sprintf(buffer_card1_channel_1, "FPS: %d", int(driver_manager.fps_card1_ch1));
             cv::putText(bgrImage_card1_channel1, buffer_card1_channel_1, cv::Point(bgrImage_card1_channel1.cols - 140, 930),
-                        cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(0, 255, 0), 2);
+                        cv::FONT_HERSHEY_SIMPLEX, 1,
+                        (driver_manager.fps_card1_ch1 < 10 ? cv::Scalar(0, 0, 255) : cv::Scalar(0, 255, 0)), 2);
         }
         else
         {
@@ -1168,7 +1214,8 @@ void DriverManager::handleCard1Channel1(UINT32 *data)
 
             sprintf(buffer_card1_channel_1, "FPS: %d", int(driver_manager.fps_card1_ch1));
             cv::putText(bgrImage_card1_channel1, buffer_card1_channel_1, cv::Point(bgrImage_card1_channel1.cols - 140, 40),
-                        cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(0, 255, 0), 2);
+                        cv::FONT_HERSHEY_SIMPLEX, 1,
+                        (driver_manager.fps_card1_ch1 < 10 ? cv::Scalar(0, 0, 255) : cv::Scalar(0, 255, 0)), 2);
 
             sprintf(buffer_card1_channel_1, "Card: %s", driver_manager.card_1.c_str());
             cv::putText(bgrImage_card1_channel1, buffer_card1_channel_1, cv::Point(15, bgrImage_card1_channel1.rows - 780),
@@ -1277,12 +1324,43 @@ void DriverManager::handleCard1Channel2(UINT32 *data)
         string_stream_card1_channel_2.str("");
         string_stream_card1_channel_2.clear();
 
+        if (!driver_manager.oneMinuteResetDone_card1_ch2 && totalSeconds >= 60)
+        {
+            fprintf(stderr, "[FD][Velocity card1 ch2] elapsed 1 min, resetting frame/error counters at %s\n",
+                    timeStr.c_str());
+            fflush(stderr);
+            if (driver_manager.frameCount_card1_Ch2)        *driver_manager.frameCount_card1_Ch2 = 0;
+            if (driver_manager.errorFrameCount_card1_Ch2)   *driver_manager.errorFrameCount_card1_Ch2 = 0;
+            if (driver_manager.card1Props.frameCount_Ch2)        *driver_manager.card1Props.frameCount_Ch2 = 0;
+            if (driver_manager.card1Props.errorFrameCount_Ch2)   *driver_manager.card1Props.errorFrameCount_Ch2 = 0;
+            driver_manager.oneMinuteResetDone_card1_ch2 = true;
+        }
+
         if (totalSeconds % 2 == 0)
         {
             rc = GRTV_GetFPGAJunctionTemp(driver_manager.First_Driver, &jtemp_card1_channel2);
             auto nowfpstime = std::chrono::steady_clock::now();
             std::chrono::duration<float> elapsed_fps_time = std::chrono::duration_cast<std::chrono::seconds>(nowfpstime - driver_manager.card1_ch2_time);
             driver_manager.fps_card1_ch2 = driver_manager.counter_card1_ch2 / (elapsed_fps_time.count() + 1e-9);
+
+            if (totalSeconds >= 10)
+            {
+                int curFps = int(driver_manager.fps_card1_ch2);
+                if (curFps < 10 && !driver_manager.fpsBelow10_card1_ch2)
+                {
+                    fprintf(stderr, "[FD][Velocity card1 ch2] FPS dropped below 10 at %s (fps=%d)\n",
+                            timeStr.c_str(), curFps);
+                    fflush(stderr);
+                    driver_manager.fpsBelow10_card1_ch2 = true;
+                }
+                else if (curFps >= 10 && driver_manager.fpsBelow10_card1_ch2)
+                {
+                    fprintf(stderr, "[FD][Velocity card1 ch2] FPS recovered at %s (fps=%d)\n",
+                            timeStr.c_str(), curFps);
+                    fflush(stderr);
+                    driver_manager.fpsBelow10_card1_ch2 = false;
+                }
+            }
         }
 
         if (loopbackTestMode)
@@ -1294,7 +1372,8 @@ void DriverManager::handleCard1Channel2(UINT32 *data)
 
             sprintf(buffer_card1_channel_2, "FPS: %d", int(driver_manager.fps_card1_ch2));
             cv::putText(bgrImage_card1_channel2, buffer_card1_channel_2, cv::Point(bgrImage_card1_channel2.cols - 140, 930),
-                        cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(0, 255, 0), 2);
+                        cv::FONT_HERSHEY_SIMPLEX, 1,
+                        (driver_manager.fps_card1_ch2 < 10 ? cv::Scalar(0, 0, 255) : cv::Scalar(0, 255, 0)), 2);
         }
         else
         {
@@ -1304,7 +1383,8 @@ void DriverManager::handleCard1Channel2(UINT32 *data)
 
             sprintf(buffer_card1_channel_2, "FPS: %d", int(driver_manager.fps_card1_ch2));
             cv::putText(bgrImage_card1_channel2, buffer_card1_channel_2, cv::Point(bgrImage_card1_channel2.cols - 140, 40),
-                        cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(0, 255, 0), 2);
+                        cv::FONT_HERSHEY_SIMPLEX, 1,
+                        (driver_manager.fps_card1_ch2 < 10 ? cv::Scalar(0, 0, 255) : cv::Scalar(0, 255, 0)), 2);
 
             sprintf(buffer_card1_channel_2, "Card: %s", driver_manager.card_1.c_str());
             cv::putText(bgrImage_card1_channel2, buffer_card1_channel_2, cv::Point(15, bgrImage_card1_channel2.rows - 780),
@@ -1422,19 +1502,51 @@ void DriverManager::handleCard2Channel1(UINT32 *data)
         string_stream_card2_channel_1.str("");
         string_stream_card2_channel_1.clear();
 
+        if (!driver_manager.oneMinuteResetDone_card2_ch1 && totalSeconds >= 60)
+        {
+            fprintf(stderr, "[FD][Velocity card2 ch1] elapsed 1 min, resetting frame/error counters at %s\n",
+                    timeStr.c_str());
+            fflush(stderr);
+            if (driver_manager.frameCount_card2_Ch1)        *driver_manager.frameCount_card2_Ch1 = 0;
+            if (driver_manager.errorFrameCount_card2_Ch1)   *driver_manager.errorFrameCount_card2_Ch1 = 0;
+            if (driver_manager.card2Props.frameCount_Ch1)        *driver_manager.card2Props.frameCount_Ch1 = 0;
+            if (driver_manager.card2Props.errorFrameCount_Ch1)   *driver_manager.card2Props.errorFrameCount_Ch1 = 0;
+            driver_manager.oneMinuteResetDone_card2_ch1 = true;
+        }
+
         if (totalSeconds % 2 == 0)
         {
             rc = GRTV_GetFPGAJunctionTemp(driver_manager.Second_Driver, &jtemp_card2_channel1);
             auto nowfpstime = std::chrono::steady_clock::now();
             std::chrono::duration<float> elapsed_fps_time = std::chrono::duration_cast<std::chrono::seconds>(nowfpstime - driver_manager.card2_ch1_time);
             driver_manager.fps_card2_ch1 = driver_manager.counter_card2_ch1 / (elapsed_fps_time.count() + 1e-9);
+
+            if (totalSeconds >= 10)
+            {
+                int curFps = int(driver_manager.fps_card2_ch1);
+                if (curFps < 10 && !driver_manager.fpsBelow10_card2_ch1)
+                {
+                    fprintf(stderr, "[FD][Velocity card2 ch1] FPS dropped below 10 at %s (fps=%d)\n",
+                            timeStr.c_str(), curFps);
+                    fflush(stderr);
+                    driver_manager.fpsBelow10_card2_ch1 = true;
+                }
+                else if (curFps >= 10 && driver_manager.fpsBelow10_card2_ch1)
+                {
+                    fprintf(stderr, "[FD][Velocity card2 ch1] FPS recovered at %s (fps=%d)\n",
+                            timeStr.c_str(), curFps);
+                    fflush(stderr);
+                    driver_manager.fpsBelow10_card2_ch1 = false;
+                }
+            }
         }
 
         if (loopbackTestMode)
         {
             sprintf(buffer_card2_channel_1, "FPS: %d", int(driver_manager.fps_card2_ch1));
             cv::putText(bgrImage_card2_channel1, buffer_card2_channel_1, cv::Point(bgrImage_card2_channel1.cols - 140, 930),
-                        cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(0, 255, 0), 2);
+                        cv::FONT_HERSHEY_SIMPLEX, 1,
+                        (driver_manager.fps_card2_ch1 < 10 ? cv::Scalar(0, 0, 255) : cv::Scalar(0, 255, 0)), 2);
 
             sprintf(buffer_card2_channel_1, "Temperature: %d", jtemp_card2_channel1);
             cv::putText(bgrImage_card2_channel1, buffer_card2_channel_1, cv::Point(bgrImage_card2_channel1.cols - 270, 980),
@@ -1448,7 +1560,8 @@ void DriverManager::handleCard2Channel1(UINT32 *data)
 
             sprintf(buffer_card2_channel_1, "FPS: %d", int(driver_manager.fps_card2_ch1));
             cv::putText(bgrImage_card2_channel1, buffer_card2_channel_1, cv::Point(bgrImage_card2_channel1.cols - 140, 40),
-                        cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(0, 255, 0), 2);
+                        cv::FONT_HERSHEY_SIMPLEX, 1,
+                        (driver_manager.fps_card2_ch1 < 10 ? cv::Scalar(0, 0, 255) : cv::Scalar(0, 255, 0)), 2);
 
             sprintf(buffer_card2_channel_1, "Card: %s", driver_manager.card_2.c_str());
             cv::putText(bgrImage_card2_channel1, buffer_card2_channel_1, cv::Point(15, bgrImage_card2_channel1.rows - 780),
@@ -1561,19 +1674,51 @@ void DriverManager::handleCard2Channel2(UINT32 *data)
         string_stream_card2_channel_2.str("");
         string_stream_card2_channel_2.clear();
 
+        if (!driver_manager.oneMinuteResetDone_card2_ch2 && totalSeconds >= 60)
+        {
+            fprintf(stderr, "[FD][Velocity card2 ch2] elapsed 1 min, resetting frame/error counters at %s\n",
+                    timeStr.c_str());
+            fflush(stderr);
+            if (driver_manager.frameCount_card2_Ch2)        *driver_manager.frameCount_card2_Ch2 = 0;
+            if (driver_manager.errorFrameCount_card2_Ch2)   *driver_manager.errorFrameCount_card2_Ch2 = 0;
+            if (driver_manager.card2Props.frameCount_Ch2)        *driver_manager.card2Props.frameCount_Ch2 = 0;
+            if (driver_manager.card2Props.errorFrameCount_Ch2)   *driver_manager.card2Props.errorFrameCount_Ch2 = 0;
+            driver_manager.oneMinuteResetDone_card2_ch2 = true;
+        }
+
         if (totalSeconds % 2 == 0)
         {
             rc = GRTV_GetFPGAJunctionTemp(driver_manager.Second_Driver, &jtemp_card2_channel2);
             auto nowfpstime = std::chrono::steady_clock::now();
             std::chrono::duration<float> elapsed_fps_time = nowfpstime - driver_manager.card2_ch2_time;
             driver_manager.fps_card2_ch2 = driver_manager.counter_card2_ch2 / (elapsed_fps_time.count() + 1e-9f);
+
+            if (totalSeconds >= 10)
+            {
+                int curFps = int(driver_manager.fps_card2_ch2);
+                if (curFps < 10 && !driver_manager.fpsBelow10_card2_ch2)
+                {
+                    fprintf(stderr, "[FD][Velocity card2 ch2] FPS dropped below 10 at %s (fps=%d)\n",
+                            timeStr.c_str(), curFps);
+                    fflush(stderr);
+                    driver_manager.fpsBelow10_card2_ch2 = true;
+                }
+                else if (curFps >= 10 && driver_manager.fpsBelow10_card2_ch2)
+                {
+                    fprintf(stderr, "[FD][Velocity card2 ch2] FPS recovered at %s (fps=%d)\n",
+                            timeStr.c_str(), curFps);
+                    fflush(stderr);
+                    driver_manager.fpsBelow10_card2_ch2 = false;
+                }
+            }
         }
 
         if (loopbackTestMode)
         {
             sprintf(buffer_card2_channel_2, "FPS: %d", int(driver_manager.fps_card2_ch2));
             cv::putText(bgrImage_card2_channel2, buffer_card2_channel_2, cv::Point(bgrImage_card2_channel2.cols - 140, 930),
-                        cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(0, 255, 0), 2);
+                        cv::FONT_HERSHEY_SIMPLEX, 1,
+                        (driver_manager.fps_card2_ch2 < 10 ? cv::Scalar(0, 0, 255) : cv::Scalar(0, 255, 0)), 2);
 
             sprintf(buffer_card2_channel_2, "Temperature: %d", jtemp_card2_channel2);
             cv::putText(bgrImage_card2_channel2, buffer_card2_channel_2, cv::Point(bgrImage_card2_channel2.cols - 270, 980),
@@ -1587,7 +1732,8 @@ void DriverManager::handleCard2Channel2(UINT32 *data)
 
             sprintf(buffer_card2_channel_2, "FPS: %d", int(driver_manager.fps_card2_ch2));
             cv::putText(bgrImage_card2_channel2, buffer_card2_channel_2, cv::Point(bgrImage_card2_channel2.cols - 140, 40),
-                        cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(0, 255, 0), 2);
+                        cv::FONT_HERSHEY_SIMPLEX, 1,
+                        (driver_manager.fps_card2_ch2 < 10 ? cv::Scalar(0, 0, 255) : cv::Scalar(0, 255, 0)), 2);
 
             sprintf(buffer_card2_channel_2, "Card: %s", driver_manager.card_2.c_str());
             cv::putText(bgrImage_card2_channel2, buffer_card2_channel_2, cv::Point(15, bgrImage_card2_channel2.rows - 780),
@@ -2186,30 +2332,39 @@ uint8_t DriverManager::stopVideoCapture()
 {
     try
     {
-        video_card1_ch1.release();
-        video_card1_ch2.release();
-        video_card2_ch1.release();
-        video_card2_ch2.release();
-
+        fprintf(stderr, "[stopVideoCapture] -> setFlowControl(false)\n");
         rc = setFlowControl(false);
         checkReturnCode(rc, "setFlowControl failed");
+        fprintf(stderr, "[stopVideoCapture] setFlowControl done\n");
 
         if (driver_manager.First_Driver != 0)
         {
+            fprintf(stderr, "[stopVideoCapture] stopping CARD_1 threads\n");
             stopCard1Channel1Thread();
             stopCard1Channel2Thread();
         }
         if (driver_manager.Second_Driver != 0)
         {
+            fprintf(stderr, "[stopVideoCapture] stopping CARD_2 threads\n");
             stopCard2Channel1Thread();
             stopCard2Channel2Thread();
         }
+
+        usleep(200000);
+
+        fprintf(stderr, "[stopVideoCapture] releasing video writers\n");
+        video_card1_ch1.release();
+        video_card1_ch2.release();
+        video_card2_ch1.release();
+        video_card2_ch2.release();
+
+        fprintf(stderr, "[stopVideoCapture] done\n");
         LOG_INFO("Video capturing stopped.");
-        usleep(500000);
         return CODE_SUCCESS;
     }
     catch (const std::exception &e)
     {
+        fprintf(stderr, "[stopVideoCapture] EXC: %s\n", e.what());
         LOG_ERROR("Error stopping video capture: " << e.what());
         return CODE_STOP_VIDEO_CAPTURE_FAILED;
     }
@@ -2478,17 +2633,22 @@ uint8_t DriverManager::stopFlickerDetection()
 {
     try
     {
+        fprintf(stderr, "[stopFlickerDetection] enter\n");
         isRunning = false;
 
+        fprintf(stderr, "[stopFlickerDetection] -> stopVideoCapture\n");
         rc = stopVideoCapture();
         checkReturnCode(rc, "stopVideoCapture failed");
+        fprintf(stderr, "[stopFlickerDetection] stopVideoCapture done; -> cleanup\n");
         rc = cleanup();
         checkReturnCode(rc, "cleanup failed");
+        fprintf(stderr, "[stopFlickerDetection] cleanup done\n");
         LOG_INFO("Flicker Detection Stopped.");
         return CODE_SUCCESS;
     }
     catch (const std::exception &e)
     {
+        fprintf(stderr, "[stopFlickerDetection] EXC: %s\n", e.what());
         LOG_ERROR("Error stopping flicker detection: " << e.what());
         return CODE_STOP_FLICKER_DETECTION_FAILED;
     }
@@ -2572,6 +2732,45 @@ uint8_t DriverManager::resetStatistics(Card card)
     catch (const std::exception &e)
     {
         LOG_ERROR("Error resetting statistics: " << e.what());
+        return CODE_RESET_STATISTICS_FAILED;
+    }
+}
+
+// Resets only the frame and error counters for the specified card(s) without
+// touching SSIM state (firstFrame/isFirst/scorePrevious) or FPS-related fields.
+// Intended for the periodic statistics reset so it does not perturb FPS or
+// SSIM continuity.
+uint8_t DriverManager::resetFrameCounters(Card card)
+{
+    try
+    {
+        if (card == CARD_1 || card == CARD_BOTH)
+        {
+            if (frameCount_card1_Ch1)        *frameCount_card1_Ch1 = 0;
+            if (frameCount_card1_Ch2)        *frameCount_card1_Ch2 = 0;
+            if (errorFrameCount_card1_Ch1)   *errorFrameCount_card1_Ch1 = 0;
+            if (errorFrameCount_card1_Ch2)   *errorFrameCount_card1_Ch2 = 0;
+            if (card1Props.frameCount_Ch1)        *card1Props.frameCount_Ch1 = 0;
+            if (card1Props.frameCount_Ch2)        *card1Props.frameCount_Ch2 = 0;
+            if (card1Props.errorFrameCount_Ch1)   *card1Props.errorFrameCount_Ch1 = 0;
+            if (card1Props.errorFrameCount_Ch2)   *card1Props.errorFrameCount_Ch2 = 0;
+        }
+        if (card == CARD_2 || card == CARD_BOTH)
+        {
+            if (frameCount_card2_Ch1)        *frameCount_card2_Ch1 = 0;
+            if (frameCount_card2_Ch2)        *frameCount_card2_Ch2 = 0;
+            if (errorFrameCount_card2_Ch1)   *errorFrameCount_card2_Ch1 = 0;
+            if (errorFrameCount_card2_Ch2)   *errorFrameCount_card2_Ch2 = 0;
+            if (card2Props.frameCount_Ch1)        *card2Props.frameCount_Ch1 = 0;
+            if (card2Props.frameCount_Ch2)        *card2Props.frameCount_Ch2 = 0;
+            if (card2Props.errorFrameCount_Ch1)   *card2Props.errorFrameCount_Ch1 = 0;
+            if (card2Props.errorFrameCount_Ch2)   *card2Props.errorFrameCount_Ch2 = 0;
+        }
+        return CODE_SUCCESS;
+    }
+    catch (const std::exception &e)
+    {
+        LOG_ERROR("Error resetting frame counters: " << e.what());
         return CODE_RESET_STATISTICS_FAILED;
     }
 }

@@ -111,12 +111,16 @@ uint8_t startFlickerDetection(Card card_1, Channel channel_1,
             usleep(100000);
         }
 
+        rc = driver_manager.printStatistics();
+        checkReturnCode(rc, "Print Velocity Statistics Failed.");
+        LOG_INFO("Velocity Flicker Detection stopped successfully.");
+
         return CODE_SUCCESS;
     }
     catch (const std::exception &e)
     {
         LOG_ERROR("Error: " << e.what());
-        driver_manager.cleanup();
+        driver_manager.stopFlickerDetection();
         return CODE_START_FLICKER_DETECTION_FAILED;
     }
 }

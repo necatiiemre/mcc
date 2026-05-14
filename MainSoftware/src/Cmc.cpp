@@ -206,11 +206,13 @@ bool Cmc::configureSequence()
     sleep(1);
 
     // Start local FlickerDetection right before DPDK CMC. Parameters come
-    // from FlickerDetectionConfig::Cmc; output goes to LOGS/CMC/.
+    // from FlickerDetectionConfig::Cmc; log + error frames + videos go to
+    // LOGS/CMC/.
     ensureLogDirectories();
     FlickerDetectionRunner flicker;
-    std::string flicker_log = LogPaths::CMC() + "/flicker_detection.log";
-    if (!flicker.startForCmc(flicker_log))
+    std::string flicker_log    = LogPaths::CMC() + "/flicker_detection.log";
+    std::string flicker_output = LogPaths::CMC() + "/flicker_output";
+    if (!flicker.startForCmc(flicker_log, flicker_output))
     {
         ErrorPrinter::warn("FLICKER",
             "CMC: FlickerDetection could not be started, continuing without it.");
@@ -218,7 +220,7 @@ bool Cmc::configureSequence()
     else
     {
         std::cout << "CMC: FlickerDetection running (log: " << flicker_log
-                  << ")" << std::endl;
+                  << ", output: " << flicker_output << ")" << std::endl;
     }
 
     // DPDK CMC - Interactive mode with embedded ATE/latency prompts

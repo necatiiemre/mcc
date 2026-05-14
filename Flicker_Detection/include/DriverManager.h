@@ -57,6 +57,7 @@ public:
     uint8_t startVideoCapture();
     uint8_t stopVideoCapture();
     uint8_t resetStatistics(Card card);
+    uint8_t resetFrameCounters(Card card);
     uint8_t printStatistics();
     uint8_t closeCard(UINT_PTR &driver, void *mem1, void *mem2, const std::string &cardName);
     uint8_t stopFlickerDetection();
@@ -257,6 +258,16 @@ public:
     bool stopRequested_card1_ch2 = false;
     bool stopRequested_card2_ch1 = false;
     bool stopRequested_card2_ch2 = false;
+
+    bool fpsBelow10_card1_ch1 = false;
+    bool fpsBelow10_card1_ch2 = false;
+    bool fpsBelow10_card2_ch1 = false;
+    bool fpsBelow10_card2_ch2 = false;
+
+    bool oneMinuteResetDone_card1_ch1 = false;
+    bool oneMinuteResetDone_card1_ch2 = false;
+    bool oneMinuteResetDone_card2_ch1 = false;
+    bool oneMinuteResetDone_card2_ch2 = false;
 
 private:
     struct ImageBuffers

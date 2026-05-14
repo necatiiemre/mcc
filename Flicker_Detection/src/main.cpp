@@ -21,11 +21,34 @@
 std::atomic<bool> stopRequested{false};
 
 static std::atomic<bool> g_shutdown_signal{false};
+static std::atomic<bool> g_systems_stopped{false};
 
 static void shutdown_signal_handler(int /*sig*/)
 {
     g_shutdown_signal = true;
     stopRequested = true;
+}
+
+static void stopAllSystemsOnce()
+{
+    bool expected = false;
+    if (!g_systems_stopped.compare_exchange_strong(expected, true))
+        return;
+    fprintf(stderr, "[shutdown] stopAllSystemsOnce: stopFlickerDetection start\n");
+    driver_manager.stopFlickerDetection();
+    fprintf(stderr, "[shutdown] stopAllSystemsOnce: stopFlickerDetection done\n");
+    dvi_manager.stop(2);
+    fprintf(stderr, "[shutdown] stopAllSystemsOnce: dvi_manager.stop done\n");
+    try
+    {
+        cv::destroyAllWindows();
+        for (int i = 0; i < 10; ++i)
+            cv::waitKey(10);
+    }
+    catch (...)
+    {
+    }
+    fprintf(stderr, "[shutdown] stopAllSystemsOnce: GUI windows destroyed\n");
 }
 
 /* Velocity Flicker Detection Thread */
@@ -99,11 +122,7 @@ void processCommands()
         {
             std::cout << "Stopping all systems...\n";
             stopRequested = true;
-
-            rc = driver_manager.stopFlickerDetection();
-            checkReturnCode(rc, "Stop Flicker Detection Failed.");
-            rc = dvi_manager.stop(2);
-            checkReturnCode(rc, "DVI Manager stop failed.");
+            stopAllSystemsOnce();
             break;
         }
         else if (command == "stop card" || command == "3")
@@ -149,7 +168,9 @@ void processCommands()
         }
         else if (command == "exit" || command == "7")
         {
+            std::cout << "Exiting, stopping all systems...\n";
             stopRequested = true;
+            stopAllSystemsOnce();
             break;
         }
         else
@@ -171,6 +192,7 @@ struct CliConfig
     int dviChannel = 0;
     bool loopback = false;
     bool noCommands = false;
+    std::string outputDir;
 };
 
 static bool parseIntArg(const std::string& s, int& out)
@@ -197,6 +219,10 @@ static CliConfig parseArgs(int argc, char** argv)
         else if (a == "--dvi-channel") next(cfg.dviChannel);
         else if (a == "--loopback") cfg.loopback = true;
         else if (a == "--no-commands") cfg.noCommands = true;
+        else if (a == "--output-dir")
+        {
+            if (i + 1 < argc) cfg.outputDir = argv[++i];
+        }
         else
         {
             std::cerr << "Unknown argument: " << a << std::endl;
@@ -214,6 +240,25 @@ int main(int argc, char** argv)
     cv::ocl::setUseOpenCL(false);
 
     CliConfig cli = parseArgs(argc, argv);
+
+    if (!cli.outputDir.empty())
+    {
+        directory_manager.setBaseOutputDir(cli.outputDir);
+    }
+
+    struct sigaction sa{};
+    sa.sa_handler = shutdown_signal_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    sigaction(SIGTERM, &sa, nullptr);
+    sigaction(SIGINT, &sa, nullptr);
+
+    std::thread shutdown_watcher([]() {
+        while (!g_shutdown_signal) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        }
+        stopAllSystemsOnce();
+    });
 
     std::thread velocity_thread;
     std::thread dvi_thread;
@@ -256,33 +301,21 @@ int main(int argc, char** argv)
         }
 
         std::thread command_thread;
-        std::thread shutdown_watcher;
-        if (cli.noCommands)
-        {
-            struct sigaction sa{};
-            sa.sa_handler = shutdown_signal_handler;
-            sigemptyset(&sa.sa_mask);
-            sa.sa_flags = 0;
-            sigaction(SIGTERM, &sa, nullptr);
-            sigaction(SIGINT, &sa, nullptr);
-
-            shutdown_watcher = std::thread([]() {
-                while (!g_shutdown_signal) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(200));
-                }
-                driver_manager.stopFlickerDetection();
-                dvi_manager.stop(2);
-            });
-        }
-        else
+        if (!cli.noCommands)
         {
             command_thread = std::thread(processCommands);
         }
 
+        fprintf(stderr, "[shutdown] joining velocity_thread...\n");
         if (velocity_thread.joinable()) velocity_thread.join();
+        fprintf(stderr, "[shutdown] velocity_thread joined; joining dvi_thread...\n");
         if (dvi_thread.joinable()) dvi_thread.join();
+        fprintf(stderr, "[shutdown] dvi_thread joined; joining command_thread...\n");
         if (command_thread.joinable()) command_thread.join();
+        fprintf(stderr, "[shutdown] command_thread joined; releasing watcher...\n");
+        g_shutdown_signal = true;
         if (shutdown_watcher.joinable()) shutdown_watcher.join();
+        fprintf(stderr, "[shutdown] watcher joined.\n");
         std::cout << "Program terminated successfully.\n";
         return 0;
     }
@@ -399,12 +432,20 @@ int main(int argc, char** argv)
     std::thread command_thread(processCommands);
 
     // Wait for all threads
+    fprintf(stderr, "[shutdown] joining velocity_thread...\n");
     if (velocity_thread.joinable())
         velocity_thread.join();
+    fprintf(stderr, "[shutdown] velocity_thread joined; joining dvi_thread...\n");
     if (dvi_thread.joinable())
         dvi_thread.join();
+    fprintf(stderr, "[shutdown] dvi_thread joined; joining command_thread...\n");
     if (command_thread.joinable())
         command_thread.join();
+    fprintf(stderr, "[shutdown] command_thread joined; releasing watcher...\n");
+
+    g_shutdown_signal = true;
+    if (shutdown_watcher.joinable()) shutdown_watcher.join();
+    fprintf(stderr, "[shutdown] watcher joined.\n");
 
     std::cout << "✅ Program terminated successfully.\n";
     return 0;
